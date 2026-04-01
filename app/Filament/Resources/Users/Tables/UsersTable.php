@@ -1,0 +1,107 @@
+<?php
+
+namespace App\Filament\Resources\Users\Tables;
+
+use Filament\Actions\BulkActionGroup;
+use Filament\Actions\DeleteBulkAction;
+use Filament\Actions\EditAction;
+use Filament\Tables\Columns\IconColumn;
+use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Filters\SelectFilter;
+use Filament\Tables\Filters\TernaryFilter;
+use Filament\Tables\Table;
+use Illuminate\Support\Facades\Auth;
+
+class UsersTable
+{
+    public static function configure(Table $table): Table
+    {
+        return $table
+            ->modifyQueryUsing(function ($query) {
+                $user = Auth::user();
+
+                // If user is super admin, show all users
+                if ($user->is_super_admin) {
+                    return $query;
+                }
+
+                // For non-super admins, show only users from their company
+                return $query->where('company_id', $user->company_id);
+            })
+            ->columns([
+                TextColumn::make('name')
+                    ->label('User')
+                    ->searchable()
+                    ->sortable()
+                    ->weight('semibold')
+                    ->description(fn ($record) => $record->position ?? '—')
+                    ->icon('heroicon-o-user-circle'),
+
+                TextColumn::make('email')
+                    ->label('Contact')
+                    ->searchable()
+                    ->description(fn ($record) => $record->phone ?? '—')
+                    ->icon('heroicon-o-envelope')
+                    ->copyable()
+                    ->copyMessage('Email copied'),
+
+                TextColumn::make('company.name')
+                    ->label('Company')
+                    ->searchable()
+                    ->sortable()
+                    ->icon('heroicon-o-building-office')
+                    ->placeholder('—')
+                    ->visible(fn () => Auth::user()?->is_super_admin ?? false), // Only show company column to super admins
+
+                IconColumn::make('is_super_admin')
+                    ->label('Super Admin')
+                    ->boolean()
+                    ->trueIcon('heroicon-o-shield-check')
+                    ->falseIcon('heroicon-o-shield-exclamation')
+                    ->trueColor('warning')
+                    ->falseColor('gray')
+                    ->visible(fn () => Auth::user()?->is_super_admin ?? false), // Only show super admin column to super admins
+
+                TextColumn::make('created_at')
+                    ->label('Joined')
+                    ->dateTime('M j, Y')
+                    ->sortable()
+                    ->icon('heroicon-o-calendar')
+                    ->toggleable(isToggledHiddenByDefault: true),
+
+                TextColumn::make('updated_at')
+                    ->label('Last Updated')
+                    ->since()
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+            ])
+            ->filters([
+                TernaryFilter::make('is_super_admin')
+                    ->label('Role')
+                    ->placeholder('All users')
+                    ->trueLabel('Super admins only')
+                    ->falseLabel('Regular users only')
+                    ->visible(fn () => Auth::user()?->is_super_admin ?? false), // Only show filter to super admins
+
+                SelectFilter::make('company')
+                    ->label('Company')
+                    ->relationship('company', 'name')
+                    ->searchable()
+                    ->preload()
+                    ->visible(fn () => Auth::user()?->is_super_admin ?? false), // Only show filter to super admins
+            ])
+            ->recordActions([
+                EditAction::make()
+                    ->iconButton()
+                    ->tooltip('Edit user'),
+            ])
+            ->toolbarActions([
+                BulkActionGroup::make([
+                    DeleteBulkAction::make(),
+                ]),
+            ])
+            ->defaultSort('created_at', 'desc')
+            ->striped()
+            ->paginated([10, 25, 50]);
+    }
+}
