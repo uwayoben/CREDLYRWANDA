@@ -8,6 +8,7 @@ use App\Exports\LoansCrbExport;
 use App\Filament\Exports\LoansStandardExport;
 use App\Filament\Exports\BnrReportExport;
 use App\Filament\Exports\CrbReportExport;
+use App\Imports\LoansImport;                      // ← NEW
 use Carbon\Carbon;
 use Filament\Actions\Action;
 use Filament\Actions\ActionGroup;
@@ -17,6 +18,8 @@ use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
 use Filament\Actions\ViewAction;
 use Filament\Forms\Components\DatePicker;
+use Filament\Forms\Components\FileUpload;         // ← NEW
+use Filament\Forms\Components\Placeholder;        // ← NEW
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
@@ -27,6 +30,7 @@ use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Storage;           // ← NEW
 use Maatwebsite\Excel\Facades\Excel;
 
 class LoansTable
@@ -44,7 +48,6 @@ class LoansTable
             )
             ->columns([
 
-                // ── Loan Number ───────────────────────────────────────────────
                 TextColumn::make('loan_number')
                     ->label('Loan #')
                     ->searchable()
@@ -56,7 +59,6 @@ class LoansTable
                     ->icon('heroicon-m-document-text')
                     ->iconColor('primary'),
 
-                // ── Customer ──────────────────────────────────────────────────
                 TextColumn::make('customer.names')
                     ->label('Customer')
                     ->searchable()
@@ -65,7 +67,6 @@ class LoansTable
                     ->limit(22)
                     ->tooltip(fn ($record) => $record->customer?->names),
 
-                // ── Loan Class ────────────────────────────────────────────────
                 TextColumn::make('loan_class')
                     ->label('Class')
                     ->size('sm')
@@ -82,7 +83,6 @@ class LoansTable
                     })
                     ->formatStateUsing(fn ($state) => ucfirst($state ?? '—')),
 
-                // ── Status ────────────────────────────────────────────────────
                 TextColumn::make('loan_status')
                     ->label('Status')
                     ->size('sm')
@@ -100,7 +100,6 @@ class LoansTable
                     })
                     ->formatStateUsing(fn ($state) => ucwords(str_replace('_', ' ', $state ?? '—'))),
 
-                // ── Principal Amount ──────────────────────────────────────────
                 TextColumn::make('principal_amount')
                     ->label('Principal')
                     ->money('RWF')
@@ -108,7 +107,6 @@ class LoansTable
                     ->size('sm')
                     ->alignEnd(),
 
-                // ── Amount Paid ───────────────────────────────────────────────
                 TextColumn::make('amount_paid')
                     ->label('Paid')
                     ->money('RWF')
@@ -117,7 +115,6 @@ class LoansTable
                     ->color('success')
                     ->alignEnd(),
 
-                // ── Principal Paid ────────────────────────────────────────────
                 TextColumn::make('principal_paid')
                     ->label('Principal Paid')
                     ->money('RWF')
@@ -127,7 +124,6 @@ class LoansTable
                     ->alignEnd()
                     ->toggleable(isToggledHiddenByDefault: false),
 
-                // ── Interest Paid ─────────────────────────────────────────────
                 TextColumn::make('interest_paid')
                     ->label('Interest Paid')
                     ->money('RWF')
@@ -136,7 +132,6 @@ class LoansTable
                     ->color('info')
                     ->alignEnd(),
 
-                // ── Penalty Paid ──────────────────────────────────────────────
                 TextColumn::make('penalty_paid')
                     ->label('Penalty')
                     ->money('RWF')
@@ -145,7 +140,6 @@ class LoansTable
                     ->color(fn ($state) => $state > 0 ? 'warning' : 'gray')
                     ->alignEnd(),
 
-                // ── Remaining Balance ─────────────────────────────────────────
                 TextColumn::make('remaining_balance')
                     ->label('Balance')
                     ->getStateUsing(fn ($record) => $record->interest_type === 'declining'
@@ -159,7 +153,6 @@ class LoansTable
                     ->color(fn ($state) => $state > 0 ? 'danger' : 'success')
                     ->alignEnd(),
 
-                // ── Interest Rate ─────────────────────────────────────────────
                 TextColumn::make('interest_rate')
                     ->label('Rate')
                     ->size('sm')
@@ -167,7 +160,6 @@ class LoansTable
                     ->sortable()
                     ->alignCenter(),
 
-                // ── Installments paid/total ───────────────────────────────────
                 TextColumn::make('number_of_installments')
                     ->label('Inst.')
                     ->size('sm')
@@ -179,7 +171,6 @@ class LoansTable
                         return $paid . '/' . $state;
                     }),
 
-                // ── Due Date ──────────────────────────────────────────────────
                 TextColumn::make('expected_completion_date')
                     ->label('Due')
                     ->date('d/m/Y')
@@ -191,7 +182,6 @@ class LoansTable
                             ? 'danger' : 'gray'
                     ),
 
-                // ── Company (super admin only) ────────────────────────────────
                 TextColumn::make('company.name')
                     ->label('Company')
                     ->searchable()
@@ -201,10 +191,8 @@ class LoansTable
                     ->placeholder('—')
                     ->visible($isSuperAdmin)
                     ->toggleable(),
-
             ])
 
-            // ── Filters ───────────────────────────────────────────────────────
             ->filters([
                 SelectFilter::make('loan_status')
                     ->label('Status')
@@ -259,6 +247,94 @@ class LoansTable
             // ── Header Actions ────────────────────────────────────────────────
             ->headerActions([
 
+                // ── ✅ Import Existing Loans ──────────────────────────────────
+                Action::make('import_loans')
+                    ->label('Import Loans')
+                    ->icon('heroicon-o-arrow-up-tray')
+                    ->color('success')
+                    ->button()
+                    ->form([
+                        Placeholder::make('info')
+                            ->label('Before you import')
+                            ->content(new \Illuminate\Support\HtmlString('
+                                <div class="text-sm space-y-1 text-gray-600">
+                                    <p>⚠️ <strong>Customers must be imported first.</strong></p>
+                                    <p>✅ Each loan is matched to a customer using their <strong>National ID</strong>.</p>
+                                    <p>✅ All figures are saved exactly as provided — no recalculation.</p>
+                                </div>
+                            ')),
+
+                        FileUpload::make('file')
+                            ->label('Upload Loans File (.xlsx)')
+                            ->disk('local')
+                            ->directory('imports/loans')
+                            ->acceptedFileTypes([
+                                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                                'application/vnd.ms-excel',
+                            ])
+                            ->required()
+                            ->helperText('Use the loans-ready-to-import.xlsx file.'),
+                    ])
+                    ->modalHeading('Import Existing Loans')
+                    ->modalDescription('Historical loans matched to customers by National ID.')
+                    ->modalIcon('heroicon-o-arrow-up-tray')
+                    ->modalSubmitActionLabel('Import Now')
+                    ->action(function (array $data) use ($user) {
+                        $relativePath = $data['file'];
+                        $fullPath     = Storage::disk('local')->path($relativePath);
+
+                        if (! file_exists($fullPath)) {
+                            Notification::make()->title('File not found')->danger()->send();
+                            return;
+                        }
+
+                        $countBefore = \App\Models\Loan::where('company_id', $user?->company_id)->count();
+
+                        try {
+                            $import = new LoansImport($user?->company_id);
+                            Excel::import($import, $fullPath);
+
+                            $countAfter   = \App\Models\Loan::where('company_id', $user?->company_id)->count();
+                            $realImported = $countAfter - $countBefore;
+
+                        } catch (\Exception $e) {
+                            Storage::disk('local')->delete($relativePath);
+                            Notification::make()
+                                ->title('Import failed')
+                                ->body('Error: ' . $e->getMessage())
+                                ->danger()->send();
+                            return;
+                        }
+
+                        Storage::disk('local')->delete($relativePath);
+
+                        if ($realImported > 0) {
+                            $body = "✅ {$realImported} loan(s) imported successfully.";
+                            if ($import->skippedCount > 0) {
+                                $body .= "\n⏭ {$import->skippedCount} skipped.";
+                            }
+                            if (! empty($import->errors)) {
+                                $body .= "\n\n⚠️ Issues:\n" . implode("\n", array_slice($import->errors, 0, 5));
+                                if (count($import->errors) > 5) {
+                                    $body .= "\n...and " . (count($import->errors) - 5) . ' more.';
+                                }
+                            }
+                            Notification::make()
+                                ->title('Loans imported!')
+                                ->body($body)
+                                ->success()->send();
+                        } else {
+                            $errorList = implode("\n", array_slice($import->errors, 0, 8));
+                            Notification::make()
+                                ->title('Nothing imported — ' . $import->skippedCount . ' rows skipped')
+                                ->body($errorList ?: 'No valid rows. Make sure customers are imported first.')
+                                ->warning()
+                                ->persistent()
+                                ->send();
+                        }
+                    }),
+
+                // ── BNR Report ────────────────────────────────────────────────
                 Action::make('export_bnr_full')
                     ->label('BNR Report')
                     ->icon('heroicon-o-document-chart-bar')
@@ -316,6 +392,7 @@ class LoansTable
                         );
                     }),
 
+                // ── CRB Report ────────────────────────────────────────────────
                 Action::make('export_crb_full')
                     ->label('CRB Report')
                     ->icon('heroicon-o-shield-check')
@@ -369,6 +446,7 @@ class LoansTable
                         );
                     }),
 
+                // ── Standard Export ───────────────────────────────────────────
                 ActionGroup::make([
                     Action::make('export_standard')
                         ->label('Standard Report (Excel)')
