@@ -3,7 +3,7 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\TransactionResource\Pages;
-use App\Models\TransactionView;
+use App\Models\Payment;
 use Filament\Resources\Resource;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\Filter;
@@ -11,15 +11,21 @@ use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 
 class TransactionResource extends Resource
 {
-    protected static ?string $model                          = TransactionView::class;
+    // ── Use Payment as the base model ─────────────────────────────────────────
+    // Payments + disbursements are unioned at the query level below.
+    protected static ?string $model = Payment::class;
+
     protected static ?string $navigationLabel                = 'Transactions';
     protected static ?string $modelLabel                     = 'Transaction';
     protected static ?string $pluralModelLabel               = 'Transactions';
     protected static ?int    $navigationSort                 = 3;
     protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-arrows-right-left';
+
+    // ── Union query: payments + loan disbursements ────────────────────────────
 
     public static function getEloquentQuery(): Builder
     {
@@ -27,11 +33,73 @@ class TransactionResource extends Resource
         $isSuperAdmin = $user?->is_super_admin ?? false;
         $companyId    = $user?->company_id;
 
-        return TransactionView::query()
-            ->when(! $isSuperAdmin, fn ($q) => $q->where('company_id', $companyId))
-            ->orderBy('transaction_date', 'desc')
-            ->orderBy('id', 'desc');
+        // ── Payments query ────────────────────────────────────────────────────
+        $payments = DB::table('payments as p')
+            ->leftJoin('loans as l',     'l.id', '=', 'p.loan_id')
+            ->leftJoin('customers as c', 'c.id', '=', 'p.customer_id')
+            ->select([
+                'p.id',
+                DB::raw("'payment' as transaction_type"),
+                'p.company_id',
+                'p.loan_id',
+                'l.loan_number          as loan_ref',
+                'p.customer_id',
+                'c.names                as customer_name',
+                'c.national_id',
+                'p.amount',
+                'p.principal_paid',
+                'p.interest_paid',
+                'p.penalty_paid',
+                'p.payment_method',
+                'p.receipt_number       as reference',
+                'p.payment_date         as transaction_date',
+                'l.loan_status',
+                'l.principal_amount     as original_loan',
+                'l.remaining_balance',
+                'p.notes',
+                'p.created_at',
+            ])
+            ->when(! $isSuperAdmin, fn ($q) => $q->where('p.company_id', $companyId));
+
+        // ── Disbursements query ───────────────────────────────────────────────
+        $disbursements = DB::table('loans as l')
+            ->leftJoin('customers as c', 'c.id', '=', 'l.customer_id')
+            ->select([
+                'l.id',
+                DB::raw("'disbursement' as transaction_type"),
+                'l.company_id',
+                'l.id                   as loan_id',
+                'l.loan_number          as loan_ref',
+                'l.customer_id',
+                'c.names                as customer_name',
+                'c.national_id',
+                'l.principal_amount     as amount',
+                DB::raw('0              as principal_paid'),
+                DB::raw('0              as interest_paid'),
+                DB::raw('0              as penalty_paid'),
+                DB::raw("'disbursement' as payment_method"),
+                'l.loan_number          as reference',
+                DB::raw('COALESCE(l.disbursement_date, l.approved_at, l.created_at) as transaction_date'),
+                'l.loan_status',
+                'l.principal_amount     as original_loan',
+                'l.remaining_balance',
+                'l.notes',
+                'l.created_at',
+            ])
+            ->whereNotIn('l.loan_status', ['pending', 'rejected'])
+            ->when(! $isSuperAdmin, fn ($q) => $q->where('l.company_id', $companyId));
+
+        // ── Union both into one query ─────────────────────────────────────────
+        $union = $payments->unionAll($disbursements);
+
+        // Wrap in a subquery so Filament can paginate, sort and filter on top
+        return Payment::from(DB::raw("({$union->toSql()}) as payments"))
+            ->mergeBindings($union)
+            ->orderByDesc('transaction_date')
+            ->orderByDesc('id');
     }
+
+    // ── Table definition ──────────────────────────────────────────────────────
 
     public static function table(Table $table): Table
     {
@@ -173,14 +241,11 @@ class TransactionResource extends Resource
                 SelectFilter::make('loan_status')
                     ->label('Loan Status')
                     ->options([
-                        'pending'     => 'Pending',
-                        'approved'    => 'Approved',
                         'disbursed'   => 'Disbursed',
                         'active'      => 'Active',
                         'completed'   => 'Completed',
                         'defaulted'   => 'Defaulted',
                         'written_off' => 'Written Off',
-                        'rejected'    => 'Rejected',
                     ]),
 
                 Filter::make('transaction_date')

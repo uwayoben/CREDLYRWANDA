@@ -34,23 +34,27 @@ class LoanForm
                     ->default(fn () => $user?->id)
                     ->dehydrated(true),
 
+                // loan_class hidden — always defaults to 'normal' on creation
+                // Can be updated later based on arrears tracking
+                Hidden::make('loan_class')
+                    ->default('normal')
+                    ->dehydrated(true),
+
                 // ── Loan Identity ─────────────────────────────────────────────
                 Section::make('Loan Identity')
                     ->description('Basic identification details for this loan')
                     ->icon('heroicon-o-document-text')
                     ->collapsible()
                     ->schema([
-                        Grid::make(3)
+                        Grid::make(2)
                             ->schema([
                                 TextInput::make('loan_number')
                                     ->label('Loan Number')
                                     ->required()
                                     ->maxLength(255)
                                     ->prefixIcon('heroicon-o-hashtag')
-                                    ->default(fn () => 'LN-' . date('Y') . '-' . str_pad(
-                                        Loan::whereYear('created_at', now()->year)->count() + 1,
-                                        4, '0', STR_PAD_LEFT
-                                    )),
+                                    ->default(fn () => self::generateLoanNumber($user))
+                                    ->helperText('Auto-generated: company prefix + date + sequence'),
 
                                 Select::make('customer_id')
                                     ->label('Customer (Search by National ID or Name)')
@@ -121,7 +125,10 @@ class LoanForm
                                         $set('_customer_spouse_name',       $customer->spouse_name);
                                         $set('_customer_spouse_phone',      $customer->spouse_phone);
                                     }),
+                            ]),
 
+                        Grid::make(1)
+                            ->schema([
                                 Select::make('loan_status')
                                     ->label('Loan Status')
                                     ->required()
@@ -334,7 +341,7 @@ class LoanForm
                                     ->disabled()
                                     ->dehydrated(true)
                                     ->default(0)
-                                    ->helperText('Auto-calculated per installment based on frequency, principal & interest.'),
+                                    ->helperText('Auto-calculated per installment.'),
 
                                 TextInput::make('total_interest')
                                     ->label('Total Interest (RWF)')
@@ -351,23 +358,6 @@ class LoanForm
                                     ->disabled()
                                     ->dehydrated(true)
                                     ->default(0),
-                            ]),
-
-                        Grid::make(1)
-                            ->schema([
-                                Select::make('loan_class')
-                                    ->label('Loan Class')
-                                    ->native(false)
-                                    ->prefixIcon('heroicon-o-tag')
-                                    ->options([
-                                        'normal'       => 'Normal',
-                                        'watch'        => 'Watch',
-                                        'substandard'  => 'Substandard',
-                                        'doubtful'     => 'Doubtful',
-                                        'loss'         => 'Loss',
-                                        'restructured' => 'Restructured',
-                                        'written_off'  => 'Written Off',
-                                    ]),
                             ]),
                     ]),
 
@@ -486,6 +476,43 @@ class LoanForm
             ]);
     }
 
+    // ── Loan number generator ─────────────────────────────────────────────────
+
+    /**
+     * Generate loan number: {2-letter company prefix}{YYYYMMDD}{4-digit sequence}
+     * Example: CR20250402-0001
+     */
+    private static function generateLoanNumber($user): string
+    {
+        // Get 2-letter company prefix from company name
+        $companyName = $user?->company?->name ?? $user?->company_id ?? 'LN';
+
+        // Take first 2 letters, uppercase, strip non-alpha
+        $prefix = strtoupper(
+            substr(
+                preg_replace('/[^A-Za-z]/', '', $companyName),
+                0,
+                2
+            )
+        );
+
+        // Fallback if company name has no letters
+        if (strlen($prefix) < 2) {
+            $prefix = str_pad($prefix, 2, 'X');
+        }
+
+        $date = now()->format('Ymd');
+
+        // Count loans created today for this company to get sequence
+        $todayCount = Loan::where('company_id', $user?->company_id)
+            ->whereDate('created_at', today())
+            ->count();
+
+        $sequence = str_pad($todayCount + 1, 4, '0', STR_PAD_LEFT);
+
+        return "{$prefix}{$date}-{$sequence}";
+    }
+
     // ── Auto-calculation helpers ──────────────────────────────────────────────
 
     private static function recalculate(callable $set, callable $get): void
@@ -515,7 +542,6 @@ class LoanForm
         $set('total_interest', round($totalInterest, 2));
         $set('total_amount',   round($principal + $totalInterest, 2));
 
-        // Recalculate completion date whenever loan terms change
         self::recalculateDates($set, $get);
     }
 
@@ -537,7 +563,7 @@ class LoanForm
                 };
                 $set('expected_completion_date', $last->format('Y-m-d'));
             } catch (\Exception $e) {
-                // silently ignore invalid date input
+                // silently ignore
             }
         }
     }

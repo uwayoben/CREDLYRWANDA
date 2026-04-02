@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Customers\Tables;
 
 use App\Exports\CustomersExport;
+use App\Imports\CustomersImport;
 use App\Models\Customer;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
@@ -15,23 +16,22 @@ use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 use Filament\Actions\Action;
-
+use Filament\Forms\Components\FileUpload;
+use Filament\Forms\Components\Placeholder;
+use Filament\Forms\Components\Select;
+use Filament\Notifications\Notification;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Auth;
-use pxlrbt\FilamentExcel\Actions\Tables\ExportBulkAction;
+use Illuminate\Support\Facades\Storage;
+use Maatwebsite\Excel\Facades\Excel;
 use pxlrbt\FilamentExcel\Actions\Tables\ExportAction;
-use App\Filament\Actions\ImportCustomersAction;
-
-
-
-
 
 class CustomersTable
 {
     public static function configure(Table $table): Table
     {
-        $user          = Auth::user();
-        $isSuperAdmin  = $user?->is_super_admin ?? false;
+        $user         = Auth::user();
+        $isSuperAdmin = $user?->is_super_admin ?? false;
 
         return $table
             ->modifyQueryUsing(fn (Builder $query) => $isSuperAdmin
@@ -132,7 +132,6 @@ class CustomersTable
                     ->icon('heroicon-o-map-pin')
                     ->iconColor('gray'),
 
-                // Only super admins see which company a customer belongs to
                 TextColumn::make('company.name')
                     ->label('Company')
                     ->searchable()
@@ -167,6 +166,7 @@ class CustomersTable
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
+
             ->filters([
                 TernaryFilter::make('is_active')
                     ->label('Status')
@@ -200,7 +200,6 @@ class CustomersTable
                         'retired'       => 'Retired',
                     ]),
 
-                // Province filter scoped to the company's own data for non-super admins
                 SelectFilter::make('province')
                     ->label('Province')
                     ->options(fn () => Customer::query()
@@ -212,7 +211,6 @@ class CustomersTable
                     )
                     ->searchable(),
 
-                // Super admin only: filter by company
                 SelectFilter::make('company')
                     ->label('Company')
                     ->relationship('company', 'name')
@@ -220,62 +218,157 @@ class CustomersTable
                     ->preload()
                     ->visible($isSuperAdmin),
             ])
+
             ->headerActions([
-    Action::make('import_customers')
-        ->label('Import')
-        ->icon('heroicon-o-arrow-up-tray')
-        ->color('info')
-        ->form([
-            \Filament\Forms\Components\Placeholder::make('template_info')
-                ->label('Template')
-                ->content(new \Illuminate\Support\HtmlString('
-                    <a href="' . asset('templates/customers-import-template.xlsx') . '"
-                       class="text-primary-600 underline text-sm"
-                       download>
-                       ⬇ Download Import Template
-                    </a>
-                ')),
 
-            \Filament\Forms\Components\FileUpload::make('file')
-                ->label('Excel / CSV File')
-                ->acceptedFileTypes([
-                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                    'text/csv',
-                ])
-                ->required()
-                ->helperText('Upload the filled template. Accepted: .xlsx, .csv'),
-        ])
-        ->action(function (array $data) {
-            // import logic here
-        }),
+                // ── ✅ Import Customers ───────────────────────────────────────
+                Action::make('import_customers')
+                    ->label('Import')
+                    ->icon('heroicon-o-arrow-up-tray')
+                    ->color('info')
+                    ->button()
+                    ->form([
+                        Placeholder::make('template_info')
+                            ->label('Step 1 — Download the template')
+                            ->content(new \Illuminate\Support\HtmlString('
+                                <a href="' . asset('templates/customers-import-template.xlsx') . '"
+                                   class="inline-flex items-center gap-1 text-primary-600 underline text-sm font-medium"
+                                   download>
+                                   ⬇ Download Import Template (.xlsx)
+                                </a>
+                                <p class="text-xs text-gray-500 mt-1">
+                                    Fill the template then upload below.
+                                    <strong>Full Name</strong> is required.
+                                    National ID skips duplicates.
+                                </p>
+                            ')),
 
-    ExportAction::make()
-        ->exports([
-            CustomersExport::make('customers'),
-        ]),
-])
+                        Select::make('heading_row')
+                            ->label('Which row has the column headers?')
+                            ->options([
+                                '1' => 'Row 1 — headers are on the very first row',
+                                '2' => 'Row 2 — one title row above headers',
+                                '3' => 'Row 3 — two rows above headers (default template)',
+                            ])
+                            ->default('3')
+                            ->required()
+                            ->helperText('Use Row 3 if you are using the downloaded template.'),
 
+                        FileUpload::make('file')
+                            ->label('Step 2 — Upload filled file')
+                            ->disk('local')
+                            ->directory('imports/customers')
+                            ->acceptedFileTypes([
+                                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                                'application/vnd.ms-excel',
+                                'text/csv',
+                                'application/csv',
+                            ])
+                            ->required()
+                            ->helperText('Accepted: .xlsx, .xls, .csv'),
+                    ])
+                    ->modalHeading('Import Customers')
+                    ->modalDescription('Upload your filled Excel or CSV file to bulk-import customers.')
+                    ->modalIcon('heroicon-o-arrow-up-tray')
+                    ->modalSubmitActionLabel('Import Now')
+                    ->action(function (array $data) use ($user) {
 
+                        $relativePath = $data['file'];
+                        $fullPath     = Storage::disk('local')->path($relativePath);
+                        $headingRow   = (int) ($data['heading_row'] ?? 3);
 
+                        if (! file_exists($fullPath)) {
+                            Notification::make()
+                                ->title('File not found')
+                                ->body('The uploaded file could not be located. Please try again.')
+                                ->danger()
+                                ->send();
+                            return;
+                        }
 
-                   ->recordActions([
-                ViewAction::make()
-                    ->iconButton()
-                    ->tooltip('View customer'),
+                        $countBefore = Customer::where('company_id', $user?->company_id)->count();
 
-                EditAction::make()
-                    ->iconButton()
-                    ->tooltip('Edit customer'),
+                        try {
+                            $import = new CustomersImport($user?->company_id, $headingRow);
+                            Excel::import($import, $fullPath);
 
-                DeleteAction::make()
-                    ->iconButton()
-                    ->tooltip('Delete customer'),
+                            $countAfter   = Customer::where('company_id', $user?->company_id)->count();
+                            $realImported = $countAfter - $countBefore;
+
+                        } catch (\Exception $e) {
+                            Storage::disk('local')->delete($relativePath);
+                            Notification::make()
+                                ->title('Import failed')
+                                ->body('Error: ' . $e->getMessage())
+                                ->danger()
+                                ->send();
+                            return;
+                        }
+
+                        Storage::disk('local')->delete($relativePath);
+
+                        // ── Result notification ───────────────────────────────
+                        if ($realImported > 0) {
+
+                            $body = "✅ {$realImported} customer(s) added to the database.";
+
+                            if ($import->skippedCount > 0) {
+                                $body .= "\n⏭ {$import->skippedCount} row(s) skipped (duplicates or empty).";
+                            }
+
+                            if (! empty($import->errors)) {
+                                $body .= "\n⚠️ Issues:\n" . implode("\n", array_slice($import->errors, 0, 3));
+                            }
+
+                            Notification::make()
+                                ->title('Import successful!')
+                                ->body($body)
+                                ->success()
+                                ->send();
+
+                        } else {
+                            // Show detected keys to help diagnose
+                            $keys = ! empty($import->detectedKeys)
+                                ? 'Detected column keys: ' . implode(', ', array_slice($import->detectedKeys, 0, 8))
+                                : 'No rows were read from the file.';
+
+                            $errors = ! empty($import->errors)
+                                ? "\n\nRow errors:\n" . implode("\n", array_slice($import->errors, 0, 5))
+                                : '';
+
+                            Notification::make()
+                                ->title('Nothing imported — ' . $import->skippedCount . ' rows skipped')
+                                ->body(
+                                    "The importer could not find the customer name column.\n\n" .
+                                    $keys .
+                                    "\n\nExpected one of: full_name, names, name, customer_name" .
+                                    $errors
+                                )
+                                ->warning()
+                                ->persistent()
+                                ->send();
+                        }
+                    }),
+
+                // ── Export ────────────────────────────────────────────────────
+                ExportAction::make()
+                    ->exports([
+                        CustomersExport::make('customers'),
+                    ]),
             ])
+
+            ->recordActions([
+                ViewAction::make()->iconButton()->tooltip('View customer'),
+                EditAction::make()->iconButton()->tooltip('Edit customer'),
+                DeleteAction::make()->iconButton()->tooltip('Delete customer'),
+            ])
+
             ->toolbarActions([
                 BulkActionGroup::make([
                     DeleteBulkAction::make(),
                 ]),
             ])
+
             ->defaultSort('created_at', 'desc')
             ->striped()
             ->paginated([10, 25, 50])
