@@ -18,15 +18,19 @@ class UsersTable
     {
         return $table
             ->modifyQueryUsing(function ($query) {
-                $user = Auth::user();
+                $user         = Auth::user();
+                $isSuperAdmin = $user?->is_super_admin ?? false;
 
-                // If user is super admin, show all users
-                if ($user->is_super_admin) {
+                if ($isSuperAdmin) {
+                    // Super admin sees all users from all companies
                     return $query;
                 }
 
-                // For non-super admins, show only users from their company
-                return $query->where('company_id', $user->company_id);
+                // Regular users see only their company's users
+                // AND never see super admin accounts
+                return $query
+                    ->where('company_id', $user->company_id)
+                    ->where('is_super_admin', false);
             })
             ->columns([
                 TextColumn::make('name')
@@ -51,7 +55,7 @@ class UsersTable
                     ->sortable()
                     ->icon('heroicon-o-building-office')
                     ->placeholder('—')
-                    ->visible(fn () => Auth::user()?->is_super_admin ?? false), // Only show company column to super admins
+                    ->visible(fn () => Auth::user()?->is_super_admin ?? false),
 
                 IconColumn::make('is_super_admin')
                     ->label('Super Admin')
@@ -60,7 +64,7 @@ class UsersTable
                     ->falseIcon('heroicon-o-shield-exclamation')
                     ->trueColor('warning')
                     ->falseColor('gray')
-                    ->visible(fn () => Auth::user()?->is_super_admin ?? false), // Only show super admin column to super admins
+                    ->visible(fn () => Auth::user()?->is_super_admin ?? false),
 
                 TextColumn::make('created_at')
                     ->label('Joined')
@@ -81,14 +85,14 @@ class UsersTable
                     ->placeholder('All users')
                     ->trueLabel('Super admins only')
                     ->falseLabel('Regular users only')
-                    ->visible(fn () => Auth::user()?->is_super_admin ?? false), // Only show filter to super admins
+                    ->visible(fn () => Auth::user()?->is_super_admin ?? false),
 
                 SelectFilter::make('company')
                     ->label('Company')
                     ->relationship('company', 'name')
                     ->searchable()
                     ->preload()
-                    ->visible(fn () => Auth::user()?->is_super_admin ?? false), // Only show filter to super admins
+                    ->visible(fn () => Auth::user()?->is_super_admin ?? false),
             ])
             ->recordActions([
                 EditAction::make()
