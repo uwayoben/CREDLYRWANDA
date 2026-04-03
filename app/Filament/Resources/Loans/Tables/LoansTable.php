@@ -8,7 +8,7 @@ use App\Exports\LoansCrbExport;
 use App\Filament\Exports\LoansStandardExport;
 use App\Filament\Exports\BnrReportExport;
 use App\Filament\Exports\CrbReportExport;
-use App\Imports\LoansImport;                      // ← NEW
+use App\Imports\LoansImport;
 use Carbon\Carbon;
 use Filament\Actions\Action;
 use Filament\Actions\ActionGroup;
@@ -18,8 +18,8 @@ use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
 use Filament\Actions\ViewAction;
 use Filament\Forms\Components\DatePicker;
-use Filament\Forms\Components\FileUpload;         // ← NEW
-use Filament\Forms\Components\Placeholder;        // ← NEW
+use Filament\Forms\Components\FileUpload;
+use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
@@ -30,7 +30,7 @@ use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Storage;           // ← NEW
+use Illuminate\Support\Facades\Storage;
 use Maatwebsite\Excel\Facades\Excel;
 
 class LoansTable
@@ -48,25 +48,35 @@ class LoansTable
             )
             ->columns([
 
+                // ── Loan Number ───────────────────────────────────────────────
                 TextColumn::make('loan_number')
                     ->label('Loan #')
                     ->searchable()
                     ->sortable()
                     ->size('sm')
                     ->weight('bold')
+                    ->fontFamily('mono')
                     ->copyable()
-                    ->copyMessage('Copied!')
+                    ->copyMessage('Loan number copied!')
                     ->icon('heroicon-m-document-text')
-                    ->iconColor('primary'),
+                    ->iconColor('primary')
+                    ->color('primary'),
 
+                // ── Customer ──────────────────────────────────────────────────
                 TextColumn::make('customer.names')
                     ->label('Customer')
                     ->searchable()
                     ->sortable()
                     ->size('sm')
-                    ->limit(22)
-                    ->tooltip(fn ($record) => $record->customer?->names),
+                    ->weight('medium')
+                    ->limit(20)
+                    ->tooltip(fn ($record) => implode(' | ', array_filter([
+                        $record->customer?->names,
+                        $record->customer?->national_id,
+                        $record->customer?->phone,
+                    ]))),
 
+                // ── Loan Class badge ──────────────────────────────────────────
                 TextColumn::make('loan_class')
                     ->label('Class')
                     ->size('sm')
@@ -81,8 +91,19 @@ class LoansTable
                         'written_off'  => 'gray',
                         default        => 'gray',
                     })
+                    ->icon(fn ($state) => match ($state) {
+                        'normal'       => 'heroicon-m-check-circle',
+                        'watch'        => 'heroicon-m-eye',
+                        'substandard'  => 'heroicon-m-exclamation-circle',
+                        'doubtful'     => 'heroicon-m-question-mark-circle',
+                        'loss'         => 'heroicon-m-x-circle',
+                        'restructured' => 'heroicon-m-arrow-path',
+                        'written_off'  => 'heroicon-m-trash',
+                        default        => 'heroicon-m-minus-circle',
+                    })
                     ->formatStateUsing(fn ($state) => ucfirst($state ?? '—')),
 
+                // ── Status badge ──────────────────────────────────────────────
                 TextColumn::make('loan_status')
                     ->label('Status')
                     ->size('sm')
@@ -98,23 +119,40 @@ class LoansTable
                         'rejected'    => 'danger',
                         default       => 'gray',
                     })
+                    ->icon(fn ($state) => match ($state) {
+                        'pending'     => 'heroicon-m-clock',
+                        'approved'    => 'heroicon-m-check-badge',
+                        'disbursed'   => 'heroicon-m-banknotes',
+                        'active'      => 'heroicon-m-play-circle',
+                        'completed'   => 'heroicon-m-check-badge',
+                        'defaulted'   => 'heroicon-m-exclamation-triangle',
+                        'written_off' => 'heroicon-m-x-circle',
+                        'rejected'    => 'heroicon-m-no-symbol',
+                        default       => 'heroicon-m-minus-circle',
+                    })
                     ->formatStateUsing(fn ($state) => ucwords(str_replace('_', ' ', $state ?? '—'))),
 
+                // ── Principal ─────────────────────────────────────────────────
                 TextColumn::make('principal_amount')
                     ->label('Principal')
                     ->money('RWF')
                     ->sortable()
                     ->size('sm')
-                    ->alignEnd(),
+                    ->weight('semibold')
+                    ->alignEnd()
+                    ->color('gray'),
 
+                // ── Amount Paid ───────────────────────────────────────────────
                 TextColumn::make('amount_paid')
                     ->label('Paid')
                     ->money('RWF')
                     ->sortable()
                     ->size('sm')
                     ->color('success')
+                    ->weight('medium')
                     ->alignEnd(),
 
+                // ── Principal Paid ────────────────────────────────────────────
                 TextColumn::make('principal_paid')
                     ->label('Principal Paid')
                     ->money('RWF')
@@ -124,6 +162,7 @@ class LoansTable
                     ->alignEnd()
                     ->toggleable(isToggledHiddenByDefault: false),
 
+                // ── Interest Paid ─────────────────────────────────────────────
                 TextColumn::make('interest_paid')
                     ->label('Interest Paid')
                     ->money('RWF')
@@ -132,6 +171,7 @@ class LoansTable
                     ->color('info')
                     ->alignEnd(),
 
+                // ── Penalty ───────────────────────────────────────────────────
                 TextColumn::make('penalty_paid')
                     ->label('Penalty')
                     ->money('RWF')
@@ -140,6 +180,7 @@ class LoansTable
                     ->color(fn ($state) => $state > 0 ? 'warning' : 'gray')
                     ->alignEnd(),
 
+                // ── Remaining Balance ─────────────────────────────────────────
                 TextColumn::make('remaining_balance')
                     ->label('Balance')
                     ->getStateUsing(fn ($record) => $record->interest_type === 'declining'
@@ -149,50 +190,72 @@ class LoansTable
                     ->money('RWF')
                     ->sortable()
                     ->size('sm')
-                    ->weight('semibold')
+                    ->weight('bold')
                     ->color(fn ($state) => $state > 0 ? 'danger' : 'success')
                     ->alignEnd(),
 
-                TextColumn::make('interest_rate')
-                    ->label('Rate')
-                    ->size('sm')
-                    ->suffix('%')
-                    ->sortable()
-                    ->alignCenter(),
+                // ── Interest Rate ─────────────────────────────────────────────
+                // TextColumn::make('interest_rate')
+                //     ->label('Rate')
+                //     ->size('sm')
+                //     ->suffix('%')
+                //     ->sortable()
+                //     ->alignCenter()
+                //     ->badge()
+                //     ->color('gray'),
 
-                TextColumn::make('number_of_installments')
-                    ->label('Inst.')
-                    ->size('sm')
-                    ->alignCenter()
-                    ->formatStateUsing(function ($state, $record) {
-                        $paid = $record->installments
-                            ? $record->installments->where('status', 'paid')->count()
-                            : 0;
-                        return $paid . '/' . $state;
-                    }),
+                // ── Installments ──────────────────────────────────────────────
+                // TextColumn::make('number_of_installments')
+                //     ->label('Inst.')
+                //     ->size('sm')
+                //     ->alignCenter()
+                //     ->formatStateUsing(function ($state, $record) {
+                //         $paid = $record->installments
+                //             ? $record->installments->where('status', 'paid')->count()
+                //             : 0;
+                //         return $paid . ' / ' . $state;
+                //     })
+                //     ->tooltip('Installments paid / total'),
 
+                // ── Due Date ──────────────────────────────────────────────────
                 TextColumn::make('expected_completion_date')
-                    ->label('Due')
-                    ->date('d/m/Y')
+                    ->label('Due Date')
+                    ->date('d M Y')
                     ->sortable()
                     ->size('sm')
+                    ->icon(fn ($record) =>
+                        $record->expected_completion_date?->isPast() &&
+                        ! in_array($record->loan_status, ['completed', 'written_off'])
+                            ? 'heroicon-m-exclamation-triangle'
+                            : 'heroicon-m-calendar'
+                    )
                     ->color(fn ($record) =>
                         $record->expected_completion_date?->isPast() &&
                         ! in_array($record->loan_status, ['completed', 'written_off'])
                             ? 'danger' : 'gray'
+                    )
+                    ->tooltip(fn ($record) =>
+                        $record->expected_completion_date?->isPast() &&
+                        ! in_array($record->loan_status, ['completed', 'written_off'])
+                            ? '⚠️ Overdue by ' . $record->expected_completion_date->diffForHumans()
+                            : null
                     ),
 
+                // ── Company (super admin only) ────────────────────────────────
                 TextColumn::make('company.name')
                     ->label('Company')
                     ->searchable()
                     ->sortable()
                     ->size('sm')
-                    ->limit(16)
+                    ->limit(14)
                     ->placeholder('—')
+                    ->badge()
+                    ->color('primary')
                     ->visible($isSuperAdmin)
                     ->toggleable(),
             ])
 
+            // ── Filters ───────────────────────────────────────────────────────
             ->filters([
                 SelectFilter::make('loan_status')
                     ->label('Status')
@@ -243,11 +306,12 @@ class LoansTable
                     ->preload()
                     ->visible($isSuperAdmin),
             ])
+            ->filtersFormColumns(2)
 
             // ── Header Actions ────────────────────────────────────────────────
             ->headerActions([
 
-                // ── ✅ Import Existing Loans ──────────────────────────────────
+                // Import
                 Action::make('import_loans')
                     ->label('Import Loans')
                     ->icon('heroicon-o-arrow-up-tray')
@@ -263,7 +327,6 @@ class LoansTable
                                     <p>✅ All figures are saved exactly as provided — no recalculation.</p>
                                 </div>
                             ')),
-
                         FileUpload::make('file')
                             ->label('Upload Loans File (.xlsx)')
                             ->disk('local')
@@ -299,10 +362,7 @@ class LoansTable
 
                         } catch (\Exception $e) {
                             Storage::disk('local')->delete($relativePath);
-                            Notification::make()
-                                ->title('Import failed')
-                                ->body('Error: ' . $e->getMessage())
-                                ->danger()->send();
+                            Notification::make()->title('Import failed')->body('Error: ' . $e->getMessage())->danger()->send();
                             return;
                         }
 
@@ -310,31 +370,21 @@ class LoansTable
 
                         if ($realImported > 0) {
                             $body = "✅ {$realImported} loan(s) imported successfully.";
-                            if ($import->skippedCount > 0) {
-                                $body .= "\n⏭ {$import->skippedCount} skipped.";
-                            }
+                            if ($import->skippedCount > 0) $body .= "\n⏭ {$import->skippedCount} skipped.";
                             if (! empty($import->errors)) {
                                 $body .= "\n\n⚠️ Issues:\n" . implode("\n", array_slice($import->errors, 0, 5));
-                                if (count($import->errors) > 5) {
-                                    $body .= "\n...and " . (count($import->errors) - 5) . ' more.';
-                                }
+                                if (count($import->errors) > 5) $body .= "\n...and " . (count($import->errors) - 5) . ' more.';
                             }
-                            Notification::make()
-                                ->title('Loans imported!')
-                                ->body($body)
-                                ->success()->send();
+                            Notification::make()->title('Loans imported!')->body($body)->success()->send();
                         } else {
-                            $errorList = implode("\n", array_slice($import->errors, 0, 8));
                             Notification::make()
                                 ->title('Nothing imported — ' . $import->skippedCount . ' rows skipped')
-                                ->body($errorList ?: 'No valid rows. Make sure customers are imported first.')
-                                ->warning()
-                                ->persistent()
-                                ->send();
+                                ->body(implode("\n", array_slice($import->errors, 0, 8)) ?: 'No valid rows found.')
+                                ->warning()->persistent()->send();
                         }
                     }),
 
-                // ── BNR Report ────────────────────────────────────────────────
+                // BNR Report
                 Action::make('export_bnr_full')
                     ->label('BNR Report')
                     ->icon('heroicon-o-document-chart-bar')
@@ -346,20 +396,13 @@ class LoansTable
                             ->required()
                             ->default(now()->endOfQuarter()->format('Y-m-d'))
                             ->prefixIcon('heroicon-o-calendar'),
-
                         TextInput::make('institution_name')
                             ->label('Institution Name')
                             ->default(fn () => Auth::user()?->company?->name ?? config('app.name'))
                             ->required()
                             ->prefixIcon('heroicon-o-building-office'),
-
-                        TextInput::make('sector')
-                            ->label('Sector')
-                            ->prefixIcon('heroicon-o-map-pin'),
-
-                        TextInput::make('district')
-                            ->label('District')
-                            ->prefixIcon('heroicon-o-map-pin'),
+                        TextInput::make('sector')->label('Sector')->prefixIcon('heroicon-o-map-pin'),
+                        TextInput::make('district')->label('District')->prefixIcon('heroicon-o-map-pin'),
                     ])
                     ->modalHeading('Generate BNR Credit Classification Report')
                     ->modalDescription('Produces the official 9-sheet BNR NDFSP report.')
@@ -370,51 +413,24 @@ class LoansTable
                             ->with(['customer', 'createdBy', 'installments', 'payments'])
                             ->when(! $isSuperAdmin, fn ($q) => $q->where('company_id', $user?->company_id))
                             ->get();
-
-                        if ($loans->isEmpty()) {
-                            Notification::make()->title('No loans found.')->warning()->send();
-                            return;
-                        }
-
-                        Notification::make()
-                            ->title('BNR report generated — ' . $loans->count() . ' loans')
-                            ->success()->send();
-
+                        if ($loans->isEmpty()) { Notification::make()->title('No loans found.')->warning()->send(); return; }
+                        Notification::make()->title('BNR report generated — ' . $loans->count() . ' loans')->success()->send();
                         return Excel::download(
-                            new BnrReportExport(
-                                $loans,
-                                $data['institution_name'],
-                                Carbon::parse($data['reporting_date'])->format('d/m/Y'),
-                                $data['sector']   ?? '',
-                                $data['district'] ?? '',
-                            ),
+                            new BnrReportExport($loans, $data['institution_name'], Carbon::parse($data['reporting_date'])->format('d/m/Y'), $data['sector'] ?? '', $data['district'] ?? ''),
                             'BNR-Report-' . now()->format('Ymd-His') . '.xlsx'
                         );
                     }),
 
-                // ── CRB Report ────────────────────────────────────────────────
+                // CRB Report
                 Action::make('export_crb_full')
                     ->label('CRB Report')
                     ->icon('heroicon-o-shield-check')
                     ->color('info')
                     ->button()
                     ->form([
-                        DatePicker::make('reporting_date')
-                            ->label('Reporting Date')
-                            ->required()
-                            ->default(now()->endOfMonth()->format('Y-m-d'))
-                            ->prefixIcon('heroicon-o-calendar'),
-
-                        TextInput::make('institution_name')
-                            ->label('Institution Name')
-                            ->default(fn () => Auth::user()?->company?->name ?? config('app.name'))
-                            ->required()
-                            ->prefixIcon('heroicon-o-building-office'),
-
-                        TextInput::make('institution_code')
-                            ->label('Institution Code')
-                            ->placeholder('e.g. CRBIC2025')
-                            ->prefixIcon('heroicon-o-hashtag'),
+                        DatePicker::make('reporting_date')->label('Reporting Date')->required()->default(now()->endOfMonth()->format('Y-m-d'))->prefixIcon('heroicon-o-calendar'),
+                        TextInput::make('institution_name')->label('Institution Name')->default(fn () => Auth::user()?->company?->name ?? config('app.name'))->required()->prefixIcon('heroicon-o-building-office'),
+                        TextInput::make('institution_code')->label('Institution Code')->placeholder('e.g. CRBIC2025')->prefixIcon('heroicon-o-hashtag'),
                     ])
                     ->modalHeading('Generate TransUnion CRB Report')
                     ->modalDescription('Produces the TransUnion CRB individual borrowers submission file.')
@@ -425,28 +441,15 @@ class LoansTable
                             ->with(['customer', 'createdBy', 'installments', 'payments'])
                             ->when(! $isSuperAdmin, fn ($q) => $q->where('company_id', $user?->company_id))
                             ->get();
-
-                        if ($loans->isEmpty()) {
-                            Notification::make()->title('No loans found.')->warning()->send();
-                            return;
-                        }
-
-                        Notification::make()
-                            ->title('CRB report generated — ' . $loans->count() . ' loans')
-                            ->success()->send();
-
+                        if ($loans->isEmpty()) { Notification::make()->title('No loans found.')->warning()->send(); return; }
+                        Notification::make()->title('CRB report generated — ' . $loans->count() . ' loans')->success()->send();
                         return Excel::download(
-                            new CrbReportExport(
-                                $loans,
-                                $data['institution_name'],
-                                Carbon::parse($data['reporting_date'])->format('Ymd'),
-                                $data['institution_code'] ?? '',
-                            ),
+                            new CrbReportExport($loans, $data['institution_name'], Carbon::parse($data['reporting_date'])->format('Ymd'), $data['institution_code'] ?? ''),
                             'CRB-Report-' . now()->format('Ymd-His') . '.xlsx'
                         );
                     }),
 
-                // ── Standard Export ───────────────────────────────────────────
+                // Export dropdown
                 ActionGroup::make([
                     Action::make('export_standard')
                         ->label('Standard Report (Excel)')
@@ -457,18 +460,9 @@ class LoansTable
                                 ->with(['customer', 'createdBy', 'installments', 'payments'])
                                 ->when(! $isSuperAdmin, fn ($q) => $q->where('company_id', $user?->company_id))
                                 ->get();
-
-                            if ($loans->isEmpty()) {
-                                Notification::make()->title('No loans found.')->warning()->send();
-                                return;
-                            }
-
+                            if ($loans->isEmpty()) { Notification::make()->title('No loans found.')->warning()->send(); return; }
                             return Excel::download(
-                                new LoansStandardExport(
-                                    $loans,
-                                    Auth::user()?->company?->name ?? config('app.name'),
-                                    now()->format('d/m/Y'),
-                                ),
+                                new LoansStandardExport($loans, Auth::user()?->company?->name ?? config('app.name'), now()->format('d/m/Y')),
                                 'Loans-Standard-' . now()->format('Ymd-His') . '.xlsx'
                             );
                         }),
@@ -501,17 +495,8 @@ class LoansTable
                     ->modalIcon('heroicon-o-check-badge')
                     ->modalSubmitActionLabel('Approve')
                     ->form([
-                        DatePicker::make('approved_at')
-                            ->label('Approval Date')
-                            ->required()
-                            ->default(now())
-                            ->prefixIcon('heroicon-o-calendar'),
-
-                        DatePicker::make('disbursed_at')
-                            ->label('Disbursement Date')
-                            ->required()
-                            ->default(now())
-                            ->prefixIcon('heroicon-o-calendar'),
+                        DatePicker::make('approved_at')->label('Approval Date')->required()->default(now())->prefixIcon('heroicon-o-calendar'),
+                        DatePicker::make('disbursed_at')->label('Disbursement Date')->required()->default(now())->prefixIcon('heroicon-o-calendar'),
                     ])
                     ->action(function ($record, array $data) use ($user) {
                         $record->update([
@@ -520,11 +505,7 @@ class LoansTable
                             'approved_at'  => Carbon::parse($data['approved_at']),
                             'disbursed_at' => Carbon::parse($data['disbursed_at']),
                         ]);
-
-                        Notification::make()
-                            ->title('Loan Approved')
-                            ->body("{$record->loan_number} approved.")
-                            ->success()->send();
+                        Notification::make()->title('Loan Approved')->body("{$record->loan_number} approved.")->success()->send();
                     }),
 
                 Action::make('make_payment')
@@ -539,13 +520,11 @@ class LoansTable
                             ->default('RCP-' . strtoupper(uniqid()))
                             ->required()
                             ->prefixIcon('heroicon-o-hashtag'),
-
                         DatePicker::make('payment_date')
                             ->label('Payment Date')
                             ->required()
                             ->default(now())
                             ->prefixIcon('heroicon-o-calendar'),
-
                         TextInput::make('amount')
                             ->label(function () use ($record) {
                                 $trueOutstanding = $record->interest_type === 'declining'
@@ -562,11 +541,7 @@ class LoansTable
                                     : (float) $record->remaining_balance;
                             })
                             ->prefixIcon('heroicon-o-currency-dollar')
-                            ->helperText(
-                                'Principal paid: RWF ' . number_format($record->principal_paid, 0) .
-                                ' | Interest paid: RWF ' . number_format($record->interest_paid, 0)
-                            ),
-
+                            ->helperText('Principal paid: RWF ' . number_format($record->principal_paid, 0) . ' | Interest paid: RWF ' . number_format($record->interest_paid, 0)),
                         Select::make('payment_method')
                             ->label('Payment Method')
                             ->required()
@@ -574,21 +549,17 @@ class LoansTable
                             ->default('cash')
                             ->prefixIcon('heroicon-o-credit-card')
                             ->options([
-                                'cash'          => 'Cash',
-                                'bank_transfer' => 'Bank Transfer',
-                                'mobile_money'  => 'Mobile Money',
-                                'cheque'        => 'Cheque',
+                                'cash'          => '💵 Cash',
+                                'bank_transfer' => '🏦 Bank Transfer',
+                                'mobile_money'  => '📱 Mobile Money',
+                                'cheque'        => '📄 Cheque',
                             ]),
-
                         TextInput::make('transaction_reference')
                             ->label('Transaction Reference')
                             ->maxLength(255)
                             ->prefixIcon('heroicon-o-document-text')
                             ->placeholder('e.g., MTN-TXN-123456'),
-
-                        Textarea::make('notes')
-                            ->label('Notes')
-                            ->rows(2),
+                        Textarea::make('notes')->label('Notes')->rows(2),
                     ])
                     ->action(function ($record, array $data) {
                         $record->recordPayment($data);
@@ -596,22 +567,21 @@ class LoansTable
                         $trueRemaining = $fresh->interest_type === 'declining'
                             ? (float) $fresh->remaining_balance + ((float) $fresh->total_interest - (float) $fresh->interest_paid)
                             : (float) $fresh->remaining_balance;
-
                         Notification::make()
                             ->title('Payment recorded')
                             ->body('RWF ' . number_format($data['amount'], 0) . ' applied. Remaining: RWF ' . number_format($trueRemaining, 0))
                             ->success()->send();
                     }),
 
-                ViewAction::make()->iconButton()->tooltip('View'),
-                EditAction::make()->iconButton()->tooltip('Edit'),
-                DeleteAction::make()->iconButton()->tooltip('Delete'),
+                ViewAction::make()->iconButton()->tooltip('View loan'),
+                EditAction::make()->iconButton()->tooltip('Edit loan'),
+                // DeleteAction::make()->iconButton()->tooltip('Delete loan'),
             ])
 
             // ── Bulk Actions ──────────────────────────────────────────────────
             ->toolbarActions([
                 BulkActionGroup::make([
-                    DeleteBulkAction::make(),
+                    // DeleteBulkAction::make(),
 
                     \Filament\Actions\BulkAction::make('bulk_export_standard')
                         ->label('Standard Report')
@@ -619,14 +589,8 @@ class LoansTable
                         ->color('success')
                         ->action(function (Collection $records) {
                             $loans = $records->load(['customer', 'createdBy', 'installments', 'payments']);
-                            if ($loans->isEmpty()) {
-                                Notification::make()->title('No loans selected.')->warning()->send();
-                                return;
-                            }
-                            return Excel::download(
-                                new LoansStandardExport($loans),
-                                'loans-standard-selected-' . now()->format('Ymd-His') . '.xlsx'
-                            );
+                            if ($loans->isEmpty()) { Notification::make()->title('No loans selected.')->warning()->send(); return; }
+                            return Excel::download(new LoansStandardExport($loans), 'loans-standard-selected-' . now()->format('Ymd-His') . '.xlsx');
                         })
                         ->deselectRecordsAfterCompletion(),
 
@@ -635,33 +599,15 @@ class LoansTable
                         ->icon('heroicon-o-document-chart-bar')
                         ->color('warning')
                         ->form([
-                            DatePicker::make('reporting_date')
-                                ->label('Reporting Date')
-                                ->required()
-                                ->default(now()->endOfQuarter()->format('Y-m-d'))
-                                ->prefixIcon('heroicon-o-calendar'),
-                            TextInput::make('institution_name')
-                                ->label('Institution Name')
-                                ->default(config('app.name'))
-                                ->required()
-                                ->prefixIcon('heroicon-o-building-office'),
+                            DatePicker::make('reporting_date')->label('Reporting Date')->required()->default(now()->endOfQuarter()->format('Y-m-d'))->prefixIcon('heroicon-o-calendar'),
+                            TextInput::make('institution_name')->label('Institution Name')->default(config('app.name'))->required()->prefixIcon('heroicon-o-building-office'),
                         ])
                         ->modalHeading('BNR Report for Selected Loans')
                         ->modalSubmitActionLabel('Generate')
                         ->action(function (Collection $records, array $data) {
                             $loans = $records->load(['customer', 'createdBy', 'installments', 'payments']);
-                            if ($loans->isEmpty()) {
-                                Notification::make()->title('No loans selected.')->warning()->send();
-                                return;
-                            }
-                            return Excel::download(
-                                new BnrReportExport(
-                                    $loans,
-                                    $data['institution_name'],
-                                    Carbon::parse($data['reporting_date'])->format('d/m/Y'),
-                                ),
-                                'bnr-report-selected-' . now()->format('Ymd-His') . '.xlsx'
-                            );
+                            if ($loans->isEmpty()) { Notification::make()->title('No loans selected.')->warning()->send(); return; }
+                            return Excel::download(new BnrReportExport($loans, $data['institution_name'], Carbon::parse($data['reporting_date'])->format('d/m/Y')), 'bnr-report-selected-' . now()->format('Ymd-His') . '.xlsx');
                         })
                         ->deselectRecordsAfterCompletion(),
 
@@ -670,33 +616,15 @@ class LoansTable
                         ->icon('heroicon-o-shield-check')
                         ->color('info')
                         ->form([
-                            DatePicker::make('reporting_date')
-                                ->label('Reporting Date')
-                                ->required()
-                                ->default(now()->endOfMonth()->format('Y-m-d'))
-                                ->prefixIcon('heroicon-o-calendar'),
-                            TextInput::make('institution_name')
-                                ->label('Institution Name')
-                                ->default(config('app.name'))
-                                ->required()
-                                ->prefixIcon('heroicon-o-building-office'),
+                            DatePicker::make('reporting_date')->label('Reporting Date')->required()->default(now()->endOfMonth()->format('Y-m-d'))->prefixIcon('heroicon-o-calendar'),
+                            TextInput::make('institution_name')->label('Institution Name')->default(config('app.name'))->required()->prefixIcon('heroicon-o-building-office'),
                         ])
                         ->modalHeading('CRB Report for Selected Loans')
                         ->modalSubmitActionLabel('Generate')
                         ->action(function (Collection $records, array $data) {
                             $loans = $records->load(['customer', 'createdBy', 'installments', 'payments']);
-                            if ($loans->isEmpty()) {
-                                Notification::make()->title('No loans selected.')->warning()->send();
-                                return;
-                            }
-                            return Excel::download(
-                                new CrbReportExport(
-                                    $loans,
-                                    $data['institution_name'],
-                                    Carbon::parse($data['reporting_date'])->format('Ymd'),
-                                ),
-                                'crb-report-selected-' . now()->format('Ymd-His') . '.xlsx'
-                            );
+                            if ($loans->isEmpty()) { Notification::make()->title('No loans selected.')->warning()->send(); return; }
+                            return Excel::download(new CrbReportExport($loans, $data['institution_name'], Carbon::parse($data['reporting_date'])->format('Ymd')), 'crb-report-selected-' . now()->format('Ymd-His') . '.xlsx');
                         })
                         ->deselectRecordsAfterCompletion(),
                 ]),
@@ -706,8 +634,15 @@ class LoansTable
             ->striped()
             ->paginated([25, 50, 100])
             ->poll('60s')
-            ->emptyStateIcon('heroicon-o-document-text')
+            ->emptyStateIcon('heroicon-o-banknotes')
             ->emptyStateHeading('No loans yet')
-            ->emptyStateDescription('Once loans are created, they will appear here.');
+            ->emptyStateDescription('Import existing loans or create a new one to get started.')
+            ->emptyStateActions([
+                Action::make('create')
+                    ->label('Create Loan')
+                    ->icon('heroicon-o-plus')
+                    ->color('primary')
+                    ->url(fn () => route('filament.admin.resources.loans.create')),
+            ]);
     }
 }
