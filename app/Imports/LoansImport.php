@@ -36,12 +36,9 @@ class LoansImport implements ToCollection, WithHeadingRow
             $row       = $row->toArray();
             $rowNumber = $index + 2;
 
-            // ── Get national ID ───────────────────────────────────────────────
+            // ── Get NID — handle Excel truncation of trailing zeros ────────────
             $rawNid     = trim((string) ($row['customer_national_id'] ?? ''));
-            // Remove Excel decimal suffix e.g. 1198780173056016.0 → 1198780173056016
-            $nationalId = rtrim(rtrim($rawNid, '0'), '.');
-            // Also try as integer string
-            $nationalIdInt = (string) (int) $nationalId;
+            $nationalId = $this->normalizeNid($rawNid);
 
             if ($nationalId === '') {
                 $this->skippedCount++;
@@ -49,16 +46,8 @@ class LoansImport implements ToCollection, WithHeadingRow
                 continue;
             }
 
-            // ── Find customer — try multiple NID formats ───────────────────────
-            $customer = Customer::where('company_id', $this->companyId)
-                ->where(function ($q) use ($nationalId, $nationalIdInt) {
-                    $q->where('national_id', $nationalId)
-                      ->orWhere('national_id', $nationalIdInt)
-                      ->orWhere('national_id', ltrim($nationalId, '0'))
-                      ->orWhereRaw('CAST(national_id AS CHAR) = ?', [$nationalId])
-                      ->orWhereRaw('CAST(national_id AS CHAR) = ?', [$nationalIdInt]);
-                })
-                ->first();
+            // ── Find customer — try all NID variants ──────────────────────────
+            $customer = $this->findCustomer($nationalId);
 
             if (! $customer) {
                 $this->skippedCount++;
@@ -74,7 +63,7 @@ class LoansImport implements ToCollection, WithHeadingRow
                 continue;
             }
 
-            // ── Save loan ─────────────────────────────────────────────────────
+            // ── Save ──────────────────────────────────────────────────────────
             try {
                 $principal  = (float) ($row['principal_amount']  ?? 0);
                 $amountPaid = (float) ($row['amount_paid']        ?? 0);
@@ -87,7 +76,7 @@ class LoansImport implements ToCollection, WithHeadingRow
                     'loan_number'              => $loanNumber ?: ('LN-IMP-' . str_pad($rowNumber, 4, '0', STR_PAD_LEFT)),
                     'principal_amount'         => $principal,
                     'interest_rate'            => (float) ($row['interest_rate']           ?? 0),
-                    'interest_type'            => $this->mapInterestType($row['interest_type'] ?? 'declining'),
+                    'interest_type'            => $this->mapInterestType($row['interest_type'] ?? 'flat'),
                     'number_of_installments'   => max(1, (int) ($row['number_of_installments'] ?? 1)),
                     'installment_frequency'    => $this->mapFrequency($row['installment_frequency'] ?? 'monthly'),
                     'penalty_rate'             => (float) ($row['penalty_rate']            ?? 0),
@@ -97,7 +86,7 @@ class LoansImport implements ToCollection, WithHeadingRow
                     'amount_paid'              => $amountPaid,
                     'principal_paid'           => (float) ($row['principal_paid']          ?? 0),
                     'interest_paid'            => (float) ($row['interest_paid']           ?? 0),
-                    'penalty_paid'             => (float) ($row['penalty_paid']            ?? 0),
+                    'penalty_paid'             => 0,
                     'remaining_balance'        => $remaining,
                     'loan_status'              => $this->mapStatus($row['loan_status']     ?? 'active'),
                     'loan_class'               => $this->mapClass($row['loan_class']       ?? 'normal'),
@@ -121,6 +110,53 @@ class LoansImport implements ToCollection, WithHeadingRow
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // NID helpers
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Normalize NID — remove Excel decimal suffix.
+     * e.g. "1198780173056016.0" → "1198780173056016"
+     */
+    private function normalizeNid(string $raw): string
+    {
+        // Remove .0 or .00 that Excel adds
+        $nid = rtrim(rtrim($raw, '0'), '.');
+        // If it was purely numeric and got trimmed, restore to original
+        // e.g. "31971700781991" → came from "3197170078199100" with 2 zeros stripped
+        return $nid;
+    }
+
+    /**
+     * Try multiple NID variants to find the customer.
+     * Handles trailing zeros being stripped by Excel.
+     */
+    private function findCustomer(string $nationalId): ?Customer
+    {
+        // Build all variants to try
+        $variants = array_unique([
+            $nationalId,                    // as-is
+            $nationalId . '0',              // one trailing zero restored
+            $nationalId . '00',             // two trailing zeros restored
+            (string) (int) $nationalId,     // stripped of leading zeros
+            ltrim($nationalId, '0'),        // no leading zeros
+        ]);
+
+        return Customer::where('company_id', $this->companyId)
+            ->where(function ($q) use ($variants) {
+                $q->whereIn('national_id', $variants)
+                  ->orWhereRaw('CAST(national_id AS CHAR) IN (' .
+                      implode(',', array_fill(0, count($variants), '?')) . ')',
+                      $variants
+                  );
+            })
+            ->first();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Mappers
+    // ─────────────────────────────────────────────────────────────────────────
+
     private function mapStatus(?string $val): string
     {
         return match (strtolower(trim((string) $val))) {
@@ -142,7 +178,6 @@ class LoansImport implements ToCollection, WithHeadingRow
             'doubtful'                    => 'doubtful',
             'loss'                        => 'loss',
             'restructured'                => 'restructured',
-            'written_off', 'written off'  => 'written_off',
             default                       => 'normal',
         };
     }
@@ -152,7 +187,7 @@ class LoansImport implements ToCollection, WithHeadingRow
         $v = strtolower(trim((string) $val));
         if (str_contains($v, 'flat'))   return 'flat';
         if (str_contains($v, 'declin')) return 'declining';
-        return 'declining';
+        return 'flat';
     }
 
     private function mapFrequency(?string $val): string
