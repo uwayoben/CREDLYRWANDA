@@ -18,7 +18,6 @@ use Filament\Tables\Table;
 use Filament\Actions\Action;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Placeholder;
-use Filament\Forms\Components\Select;
 use Filament\Notifications\Notification;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Auth;
@@ -39,6 +38,8 @@ class CustomersTable
                 : $query->where('company_id', $user?->company_id)
             )
             ->columns([
+
+                // ── Avatar ────────────────────────────────────────────────────
                 ImageColumn::make('photo')
                     ->label('')
                     ->circular()
@@ -52,51 +53,78 @@ class CustomersTable
                                 'size'       => '80',
                             ])
                     )
-                    ->size(42),
+                    ->size(36),
 
+                // ── Customer Name + National ID ───────────────────────────────
                 TextColumn::make('names')
                     ->label('Customer')
                     ->searchable()
                     ->sortable()
                     ->weight('semibold')
+                    ->size('sm')
                     ->description(fn ($record) => $record->national_id
-                        ? 'ID: ' . $record->national_id
+                        ? '🪪 ' . $record->national_id
                         : '—'
                     )
-                    ->icon('heroicon-o-user')
+                    ->icon('heroicon-m-user-circle')
                     ->iconColor('primary'),
 
+                // ── Phone + Email ─────────────────────────────────────────────
                 TextColumn::make('phone')
                     ->label('Contact')
                     ->searchable()
-                    ->description(fn ($record) => $record->email ?? '—')
-                    ->icon('heroicon-o-phone')
-                    ->iconColor('gray')
-                    ->copyable()
-                    ->copyMessage('Phone copied')
-                    ->copyMessageDuration(1500),
-
-                TextColumn::make('date_of_birth')
-                    ->label('Age')
-                    ->date('M j, Y')
-                    ->description(fn ($record) => $record->date_of_birth
-                        ? \Carbon\Carbon::parse($record->date_of_birth)->age . ' years old'
+                    ->size('sm')
+                    ->description(fn ($record) => $record->email
+                        ? '✉️ ' . $record->email
                         : '—'
                     )
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: false),
+                    ->icon('heroicon-m-phone')
+                    ->iconColor('success')
+                    ->copyable()
+                    ->copyMessage('Phone copied!')
+                    ->copyMessageDuration(1500),
 
+                // ── Age ───────────────────────────────────────────────────────
+                TextColumn::make('date_of_birth')
+                    ->label('Age')
+                    ->size('sm')
+                    ->alignCenter()
+                    ->formatStateUsing(fn ($state) => $state
+                        ? \Carbon\Carbon::parse($state)->age . ' yrs'
+                        : '—'
+                    )
+                    ->tooltip(fn ($record) => $record->date_of_birth
+                        ? \Carbon\Carbon::parse($record->date_of_birth)->format('d M Y')
+                        : null
+                    )
+                    ->sortable()
+                    ->toggleable(),
+
+                // ── Gender ────────────────────────────────────────────────────
                 TextColumn::make('gender')
+                    ->label('Gender')
+                    ->size('sm')
                     ->badge()
                     ->color(fn ($state) => match ($state) {
                         'male'   => 'info',
                         'female' => 'pink',
                         default  => 'gray',
                     })
-                    ->formatStateUsing(fn ($state) => ucfirst($state ?? '—')),
+                    ->icon(fn ($state) => match ($state) {
+                        'male'   => 'heroicon-m-user',
+                        'female' => 'heroicon-m-user',
+                        default  => 'heroicon-m-user',
+                    })
+                    ->formatStateUsing(fn ($state) => match ($state) {
+                        'male'   => '♂ Male',
+                        'female' => '♀ Female',
+                        default  => ucfirst($state ?? '—'),
+                    }),
 
+                // ── Marital Status ────────────────────────────────────────────
                 TextColumn::make('marital_status')
                     ->label('Marital')
+                    ->size('sm')
                     ->badge()
                     ->color(fn ($state) => match ($state) {
                         'single'   => 'gray',
@@ -107,8 +135,10 @@ class CustomersTable
                     })
                     ->formatStateUsing(fn ($state) => ucfirst($state ?? '—')),
 
+                // ── Employment ────────────────────────────────────────────────
                 TextColumn::make('employment_status')
                     ->label('Employment')
+                    ->size('sm')
                     ->badge()
                     ->color(fn ($state) => match ($state) {
                         'employed'      => 'success',
@@ -117,68 +147,79 @@ class CustomersTable
                         'retired'       => 'warning',
                         default         => 'gray',
                     })
+                    ->icon(fn ($state) => match ($state) {
+                        'employed'      => 'heroicon-m-briefcase',
+                        'self_employed' => 'heroicon-m-building-storefront',
+                        'unemployed'    => 'heroicon-m-x-circle',
+                        'retired'       => 'heroicon-m-academic-cap',
+                        default         => 'heroicon-m-minus-circle',
+                    })
                     ->formatStateUsing(fn ($state) => match ($state) {
-                        'self_employed' => 'Self Employed',
+                        'self_employed' => 'Self Emp.',
                         default         => ucfirst($state ?? '—'),
                     }),
 
+                // ── Location ──────────────────────────────────────────────────
                 TextColumn::make('district')
                     ->label('Location')
                     ->searchable()
+                    ->size('sm')
                     ->description(fn ($record) => collect([
                         $record->sector,
                         $record->province,
-                    ])->filter()->implode(', ') ?: '—')
-                    ->icon('heroicon-o-map-pin')
-                    ->iconColor('gray'),
+                    ])->filter()->implode(' · ') ?: '—')
+                    ->icon('heroicon-m-map-pin')
+                    ->iconColor('warning'),
 
-                TextColumn::make('company.name')
-                    ->label('Company')
-                    ->searchable()
-                    ->sortable()
-                    ->icon('heroicon-o-building-office')
-                    ->iconColor('gray')
-                    ->placeholder('—')
-                    ->visible($isSuperAdmin),
-
+                // ── Status ────────────────────────────────────────────────────
                 TextColumn::make('is_active')
                     ->label('Status')
+                    ->size('sm')
                     ->badge()
                     ->formatStateUsing(fn ($state) => $state ? 'Active' : 'Inactive')
                     ->color(fn ($state) => $state ? 'success' : 'danger')
                     ->icon(fn ($state) => $state
-                        ? 'heroicon-o-check-badge'
-                        : 'heroicon-o-x-circle'
+                        ? 'heroicon-m-check-circle'
+                        : 'heroicon-m-x-circle'
                     ),
 
+                // ── Company (super admin only) ────────────────────────────────
+                TextColumn::make('company.name')
+                    ->label('Company')
+                    ->searchable()
+                    ->sortable()
+                    ->size('sm')
+                    ->badge()
+                    ->color('primary')
+                    ->icon('heroicon-m-building-office')
+                    ->placeholder('—')
+                    ->visible($isSuperAdmin),
+
+                // ── Registered ────────────────────────────────────────────────
                 TextColumn::make('created_at')
                     ->label('Registered')
-                    ->dateTime('M j, Y')
-                    ->description(fn ($record) => $record->created_at?->diffForHumans())
-                    ->sortable()
-                    ->icon('heroicon-o-calendar')
-                    ->iconColor('gray')
-                    ->toggleable(isToggledHiddenByDefault: true),
-
-                TextColumn::make('updated_at')
-                    ->label('Last Updated')
+                    ->size('sm')
                     ->since()
                     ->sortable()
+                    ->tooltip(fn ($record) => $record->created_at?->format('d M Y, H:i'))
+                    ->icon('heroicon-m-calendar')
+                    ->iconColor('gray')
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
 
+            // ── Filters ───────────────────────────────────────────────────────
             ->filters([
                 TernaryFilter::make('is_active')
                     ->label('Status')
                     ->placeholder('All customers')
-                    ->trueLabel('Active only')
-                    ->falseLabel('Inactive only'),
+                    ->trueLabel('✅ Active only')
+                    ->falseLabel('❌ Inactive only'),
 
                 SelectFilter::make('gender')
                     ->label('Gender')
                     ->options([
-                        'male'   => 'Male',
-                        'female' => 'Female',
+                        'male'   => '♂ Male',
+                        'female' => '♀ Female',
                         'other'  => 'Other',
                     ]),
 
@@ -218,10 +259,12 @@ class CustomersTable
                     ->preload()
                     ->visible($isSuperAdmin),
             ])
+            ->filtersFormColumns(2)
 
+            // ── Header Actions ────────────────────────────────────────────────
             ->headerActions([
 
-                // ── ✅ Import Customers ───────────────────────────────────────
+                // Import
                 Action::make('import_customers')
                     ->label('Import')
                     ->icon('heroicon-o-arrow-up-tray')
@@ -229,33 +272,24 @@ class CustomersTable
                     ->button()
                     ->form([
                         Placeholder::make('template_info')
-                            ->label('Step 1 — Download the template')
+                            ->label('📋 Download the template first')
                             ->content(new \Illuminate\Support\HtmlString('
-                                <a href="' . asset('templates/customers-import-template.xlsx') . '"
-                                   class="inline-flex items-center gap-1 text-primary-600 underline text-sm font-medium"
-                                   download>
-                                   ⬇ Download Import Template (.xlsx)
-                                </a>
-                                <p class="text-xs text-gray-500 mt-1">
-                                    Fill the template then upload below.
-                                    <strong>Full Name</strong> is required.
-                                    National ID skips duplicates.
-                                </p>
+                                <div class="space-y-2">
+                                    <a href="' . asset('templates/customers-import-template.xlsx') . '"
+                                       class="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-primary-600 rounded-lg hover:bg-primary-700 transition"
+                                       download>
+                                       ⬇ Download Import Template (.xlsx)
+                                    </a>
+                                    <p class="text-xs text-gray-500 mt-1">
+                                        Fill the template then upload below.
+                                        <strong>Full Names</strong> is required.
+                                        National ID prevents duplicates globally.
+                                    </p>
+                                </div>
                             ')),
 
-                        Select::make('heading_row')
-                            ->label('Which row has the column headers?')
-                            ->options([
-                                '1' => 'Row 1 — headers are on the very first row',
-                                '2' => 'Row 2 — one title row above headers',
-                                '3' => 'Row 3 — two rows above headers (default template)',
-                            ])
-                            ->default('3')
-                            ->required()
-                            ->helperText('Use Row 3 if you are using the downloaded template.'),
-
                         FileUpload::make('file')
-                            ->label('Step 2 — Upload filled file')
+                            ->label('📂 Upload filled file')
                             ->disk('local')
                             ->directory('imports/customers')
                             ->acceptedFileTypes([
@@ -265,31 +299,25 @@ class CustomersTable
                                 'application/csv',
                             ])
                             ->required()
-                            ->helperText('Accepted: .xlsx, .xls, .csv'),
+                            ->helperText('Accepted: .xlsx, .xls, .csv — headers must be on Row 1'),
                     ])
                     ->modalHeading('Import Customers')
-                    ->modalDescription('Upload your filled Excel or CSV file to bulk-import customers.')
+                    ->modalDescription('Bulk-import customers from an Excel or CSV file. Headers on Row 1.')
                     ->modalIcon('heroicon-o-arrow-up-tray')
                     ->modalSubmitActionLabel('Import Now')
                     ->action(function (array $data) use ($user) {
-
                         $relativePath = $data['file'];
                         $fullPath     = Storage::disk('local')->path($relativePath);
-                        $headingRow   = (int) ($data['heading_row'] ?? 3);
 
                         if (! file_exists($fullPath)) {
-                            Notification::make()
-                                ->title('File not found')
-                                ->body('The uploaded file could not be located. Please try again.')
-                                ->danger()
-                                ->send();
+                            Notification::make()->title('File not found')->body('Please try again.')->danger()->send();
                             return;
                         }
 
                         $countBefore = Customer::where('company_id', $user?->company_id)->count();
 
                         try {
-                            $import = new CustomersImport($user?->company_id, $headingRow);
+                            $import = new CustomersImport($user?->company_id);
                             Excel::import($import, $fullPath);
 
                             $countAfter   = Customer::where('company_id', $user?->company_id)->count();
@@ -297,72 +325,50 @@ class CustomersTable
 
                         } catch (\Exception $e) {
                             Storage::disk('local')->delete($relativePath);
-                            Notification::make()
-                                ->title('Import failed')
-                                ->body('Error: ' . $e->getMessage())
-                                ->danger()
-                                ->send();
+                            Notification::make()->title('Import failed')->body('Error: ' . $e->getMessage())->danger()->send();
                             return;
                         }
 
                         Storage::disk('local')->delete($relativePath);
 
-                        // ── Result notification ───────────────────────────────
                         if ($realImported > 0) {
-
-                            $body = "✅ {$realImported} customer(s) added to the database.";
-
-                            if ($import->skippedCount > 0) {
-                                $body .= "\n⏭ {$import->skippedCount} row(s) skipped (duplicates or empty).";
-                            }
-
-                            if (! empty($import->errors)) {
-                                $body .= "\n⚠️ Issues:\n" . implode("\n", array_slice($import->errors, 0, 3));
-                            }
-
-                            Notification::make()
-                                ->title('Import successful!')
-                                ->body($body)
-                                ->success()
-                                ->send();
-
+                            $body = "✅ {$realImported} customer(s) added.";
+                            if ($import->skippedCount > 0) $body .= "\n⏭ {$import->skippedCount} skipped (duplicates or empty).";
+                            if (! empty($import->errors)) $body .= "\n⚠️ " . implode("\n", array_slice($import->errors, 0, 3));
+                            Notification::make()->title('Import successful!')->body($body)->success()->send();
                         } else {
-                            // Show detected keys to help diagnose
-                            $keys = ! empty($import->detectedKeys)
-                                ? 'Detected column keys: ' . implode(', ', array_slice($import->detectedKeys, 0, 8))
-                                : 'No rows were read from the file.';
-
-                            $errors = ! empty($import->errors)
-                                ? "\n\nRow errors:\n" . implode("\n", array_slice($import->errors, 0, 5))
-                                : '';
-
+                            $keys   = ! empty($import->detectedKeys) ? implode(', ', array_slice($import->detectedKeys, 0, 6)) : 'No rows read.';
+                            $errors = ! empty($import->errors) ? "\n\n" . implode("\n", array_slice($import->errors, 0, 5)) : '';
                             Notification::make()
                                 ->title('Nothing imported — ' . $import->skippedCount . ' rows skipped')
-                                ->body(
-                                    "The importer could not find the customer name column.\n\n" .
-                                    $keys .
-                                    "\n\nExpected one of: full_name, names, name, customer_name" .
-                                    $errors
-                                )
-                                ->warning()
-                                ->persistent()
-                                ->send();
+                                ->body("Detected keys: {$keys}{$errors}")
+                                ->warning()->persistent()->send();
                         }
                     }),
 
-                // ── Export ────────────────────────────────────────────────────
+                // Export
                 ExportAction::make()
                     ->exports([
                         CustomersExport::make('customers'),
                     ]),
             ])
 
+            // ── Row Actions ───────────────────────────────────────────────────
             ->recordActions([
-                ViewAction::make()->iconButton()->tooltip('View customer'),
-                EditAction::make()->iconButton()->tooltip('Edit customer'),
-                DeleteAction::make()->iconButton()->tooltip('Delete customer'),
+                ViewAction::make()
+                    ->iconButton()
+                    ->tooltip('View profile'),
+
+                EditAction::make()
+                    ->iconButton()
+                    ->tooltip('Edit customer'),
+
+                DeleteAction::make()
+                    ->iconButton()
+                    ->tooltip('Delete customer'),
             ])
 
+            // ── Bulk Actions ──────────────────────────────────────────────────
             ->toolbarActions([
                 BulkActionGroup::make([
                     DeleteBulkAction::make(),
@@ -373,8 +379,21 @@ class CustomersTable
             ->striped()
             ->paginated([10, 25, 50])
             ->poll('60s')
-            ->emptyStateIcon('heroicon-o-users')
+            ->emptyStateIcon('heroicon-o-user-group')
             ->emptyStateHeading('No customers yet')
-            ->emptyStateDescription('Once customers are added, they will appear here.');
+            ->emptyStateDescription('Import customers from Excel or add them one by one.')
+            ->emptyStateActions([
+                Action::make('import_empty')
+                    ->label('Import Customers')
+                    ->icon('heroicon-o-arrow-up-tray')
+                    ->color('info')
+                    ->url('#'),
+
+                Action::make('create_empty')
+                    ->label('Add Customer')
+                    ->icon('heroicon-o-plus')
+                    ->color('primary')
+                    ->url(fn () => route('filament.admin.resources.customers.create')),
+            ]);
     }
 }

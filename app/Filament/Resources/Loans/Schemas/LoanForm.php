@@ -358,6 +358,8 @@ class LoanForm
                                     ->disabled()
                                     ->dehydrated(true)
                                     ->default(0),
+
+                                TextInput::make('application_fee'),
                             ]),
                     ]),
 

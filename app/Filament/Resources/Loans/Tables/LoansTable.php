@@ -56,11 +56,13 @@ class LoansTable
                     ->size('sm')
                     ->weight('bold')
                     ->fontFamily('mono')
-                    ->copyable()
-                    ->copyMessage('Loan number copied!')
+                    
                     ->icon('heroicon-m-document-text')
                     ->iconColor('primary')
-                    ->color('primary'),
+                    ->color('primary')
+                    ->url(fn ($record) => route('loans.print', $record))
+->openUrlInNewTab()
+->tooltip('Click to open & print loan statement'),
 
                 // ── Customer ──────────────────────────────────────────────────
                 TextColumn::make('customer.names')
@@ -194,28 +196,7 @@ class LoansTable
                     ->color(fn ($state) => $state > 0 ? 'danger' : 'success')
                     ->alignEnd(),
 
-                // ── Interest Rate ─────────────────────────────────────────────
-                // TextColumn::make('interest_rate')
-                //     ->label('Rate')
-                //     ->size('sm')
-                //     ->suffix('%')
-                //     ->sortable()
-                //     ->alignCenter()
-                //     ->badge()
-                //     ->color('gray'),
 
-                // ── Installments ──────────────────────────────────────────────
-                // TextColumn::make('number_of_installments')
-                //     ->label('Inst.')
-                //     ->size('sm')
-                //     ->alignCenter()
-                //     ->formatStateUsing(function ($state, $record) {
-                //         $paid = $record->installments
-                //             ? $record->installments->where('status', 'paid')->count()
-                //             : 0;
-                //         return $paid . ' / ' . $state;
-                //     })
-                //     ->tooltip('Installments paid / total'),
 
                 // ── Due Date ──────────────────────────────────────────────────
                 TextColumn::make('expected_completion_date')
