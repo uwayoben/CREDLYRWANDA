@@ -56,7 +56,7 @@ class LoansTable
                     ->size('sm')
                     ->weight('bold')
                     ->fontFamily('mono')
-                    
+
                     ->icon('heroicon-m-document-text')
                     ->iconColor('primary')
                     ->color('primary')
@@ -562,7 +562,7 @@ class LoansTable
             // ── Bulk Actions ──────────────────────────────────────────────────
             ->toolbarActions([
                 BulkActionGroup::make([
-                    // DeleteBulkAction::make(),
+                    DeleteBulkAction::make(),
 
                     \Filament\Actions\BulkAction::make('bulk_export_standard')
                         ->label('Standard Report')
