@@ -181,6 +181,16 @@ class LoansTable
                     ->size('sm')
                     ->color(fn ($state) => $state > 0 ? 'warning' : 'gray')
                     ->alignEnd(),
+                    // ── Outstanding Principal ─────────────────────────────────────
+TextColumn::make('outstanding_principal')
+    ->label('Outstanding Principal')
+    ->getStateUsing(fn ($record) => max(0, (float) $record->principal_amount - (float) $record->principal_paid))
+    ->money('RWF')
+    ->size('sm')
+    ->weight('semibold')
+    ->color(fn ($state) => $state > 0 ? 'danger' : 'success')
+    ->alignEnd()
+    ->toggleable(isToggledHiddenByDefault: false),
 
                 // ── Remaining Balance ─────────────────────────────────────────
                 TextColumn::make('remaining_balance')
