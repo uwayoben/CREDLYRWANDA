@@ -360,6 +360,8 @@ class LoanForm
                                     ->default(0),
 
                                 TextInput::make('application_fee'),
+                                TextInput::make('processing_fee'),
+                                TextInput::make('managment_fee'),
                             ]),
                     ]),
 

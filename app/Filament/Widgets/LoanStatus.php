@@ -15,10 +15,8 @@ class LoanStatus extends StatsOverviewWidget
 {
     protected ?string $pollingInterval = '30s';
 
-    // ── Filter state (activeFilter is the correct property name for Filament v5) ──
     public ?string $activeFilter = 'all';
 
-    // ── Filter dropdown options ────────────────────────────────────
     protected function getFilters(): ?array
     {
         return [
@@ -34,7 +32,6 @@ class LoanStatus extends StatsOverviewWidget
         ];
     }
 
-    // ── Resolve date range from activeFilter ──────────────────────
     private function getDateRange(): ?array
     {
         return match ($this->activeFilter) {
@@ -46,18 +43,16 @@ class LoanStatus extends StatsOverviewWidget
             'last_quarter' => [Carbon::now()->subQuarter()->startOfQuarter(),  Carbon::now()->subQuarter()->endOfQuarter()],
             'this_year'    => [Carbon::now()->startOfYear(),                   Carbon::now()->endOfYear()],
             'last_year'    => [Carbon::now()->subYear()->startOfYear(),        Carbon::now()->subYear()->endOfYear()],
-            default        => null, // all time — no filter applied
+            default        => null,
         };
     }
 
-    // ── Apply date range on created_at ────────────────────────────
     private function applyDateFilter($query, ?array $range): mixed
     {
         if (! $range) return $query;
         return $query->whereBetween('created_at', $range);
     }
 
-    // ── Apply date range on payment_date ──────────────────────────
     private function applyDateFilterOnPayments($query, ?array $range): mixed
     {
         if (! $range) return $query;
@@ -90,10 +85,13 @@ class LoanStatus extends StatsOverviewWidget
         $defaultedLoans  = (clone $loanQuery)->where('loan_status', 'defaulted')->count();
 
         // ── Running balances — always all time ────────────────────
-        $totalAmountPaid    = (clone $baseQuery)->sum('amount_paid');
-        $totalOutstanding   = (clone $baseQuery)->sum('remaining_balance');
-        $totalPrincipalPaid = (clone $baseQuery)->sum('principal_paid');
-        $totalInterestPaid  = (clone $baseQuery)->sum('interest_paid');
+        $totalAmountPaid           = (clone $baseQuery)->sum('amount_paid');
+        $totalOutstanding          = (clone $baseQuery)->sum('remaining_balance');
+        $totalPrincipalPaid        = (clone $baseQuery)->sum('principal_paid');
+        $totalInterestPaid         = (clone $baseQuery)->sum('interest_paid');
+        $totalOutstandingPrincipal = (clone $baseQuery)
+            ->selectRaw('SUM(GREATEST(principal_amount - principal_paid, 0)) as total')
+            ->value('total') ?? 0;
 
         // ── Fees — filtered by loan creation date ─────────────────
         $totalProcessingFee  = (clone $loanQuery)->sum('processing_fee');
@@ -166,6 +164,12 @@ class LoanStatus extends StatsOverviewWidget
                 ->descriptionIcon('heroicon-o-banknotes')
                 ->color('success')
                 ->chart([1, 2, 4, 3, 6, 5, $totalLoans]),
+
+            Stat::make('Outstanding Principal', 'RWF ' . number_format($totalOutstandingPrincipal, 0))
+                ->description('Principal yet to be recovered (all time)')
+                ->descriptionIcon('heroicon-o-arrow-trending-down')
+                ->color($totalOutstandingPrincipal > 0 ? 'danger' : 'success')
+                ->chart([8, 7, 6, 5, 4, 3, $totalLoans]),
 
             Stat::make('Interest Earned', 'RWF ' . number_format($totalInterestPaid, 0))
                 ->description('Total interest collected (all time)')

@@ -17,8 +17,8 @@ class Loan extends Model
         'loan_class', 'date_when_arrears_start', 'arrears_amount',
         'collateral_details', 'collateral_value', 'guarantee_collateral',
         'purpose', 'notes', 'approved_by', 'approved_at',
-        'disbursed_at', 'completed_at',
-        'amount_paid', 'principal_paid', 'interest_paid',
+        'disbursed_at', 'completed_at','managment_fee',
+        'amount_paid', 'principal_paid','interest_paid',
         'penalty_paid', 'remaining_balance','loan_document'
     ];
 

@@ -15,7 +15,7 @@
             line-height: 1.5;
         }
 
-        /* ── Print bar (hidden on print) ──────────────────────────── */
+        /* ── Print bar ──────────────────────────────────────────────── */
         .print-bar {
             background: #0f172a;
             color: #fff;
@@ -160,13 +160,27 @@
         .ptable thead th:not(:first-child) { text-align: right; }
         .ptable tbody tr:nth-child(even) { background: #f8fafc; }
         .ptable tbody td { padding: 8px 12px; border-bottom: 1px solid #e2e8f0; }
-        .ptable tbody td:not(:first-child):not(:last-child):not(.td-method) { text-align: right; }
+        .ptable tbody td:not(:first-child):not(:last-child):not(.td-method):not(.td-status) { text-align: right; }
         .ptable tfoot td {
             padding: 10px 12px; font-weight: 700;
             background: #f1f5f9; border-top: 2px solid #003D22;
             text-align: right;
         }
         .ptable tfoot td:first-child { text-align: left; }
+
+        /* ── Schedule status pills ────────────────────────────────── */
+        .sched-pill {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 2px 10px; border-radius: 20px;
+            font-size: 10.5px; font-weight: 700;
+        }
+        .sched-paid     { background: rgba(74,222,128,.18); color: #16a34a; }
+        .sched-overdue  { background: rgba(248,113,113,.18); color: #dc2626; }
+        .sched-due      { background: rgba(251,191,36,.18);  color: #b45309; }
+        .sched-upcoming { background: #f1f5f9; color: #64748b; }
+
+        .row-paid { opacity: .72; }
+        .row-overdue { background: rgba(254,226,226,.4) !important; }
 
         /* ── Footer ───────────────────────────────────────────────── */
         .footer {
@@ -186,6 +200,10 @@
             .body { padding: 18px 28px; }
             .ptable thead tr { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
             .footer { padding: 10px 28px; }
+            .sched-paid, .sched-overdue, .sched-due, .sched-upcoming {
+                -webkit-print-color-adjust: exact; print-color-adjust: exact;
+            }
+            .row-overdue { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         }
     </style>
 </head>
@@ -326,6 +344,180 @@
                 <div><div class="f-label">Last Payment</div><div class="f-val">{{ $loan->last_payment_date?->format('d M Y') ?? '—' }}</div></div>
             </div>
         </div>
+
+        {{-- ═══════════════════════════════════════════════════════════
+             PAYMENT PLAN / INSTALLMENT SCHEDULE
+        ═══════════════════════════════════════════════════════════ --}}
+        @php
+            $schedPrincipal = (float) $loan->principal_amount;
+            $schedRate      = (float) $loan->interest_rate / 100;
+            $schedN         = (int)   $loan->number_of_installments;
+            $schedType      = $loan->interest_type ?? 'declining';
+            $schedEmi       = (float) $loan->emi_amount;
+            $schedFreq      = $loan->installment_frequency ?? 'monthly';
+            $schedBalance   = $schedPrincipal;
+
+            $schedStart = $loan->first_payment_date
+                ? \Carbon\Carbon::parse($loan->first_payment_date)
+                : \Carbon\Carbon::now()->addMonth();
+
+            $schedRows          = [];
+            $schedTotalEmi      = 0;
+            $schedTotalPrincipal = 0;
+            $schedTotalInterest  = 0;
+
+            // Index actual payments by position (sorted by payment_date)
+            $sortedPayments = $payments->sortBy('payment_date')->values();
+
+            for ($si = 1; $si <= $schedN; $si++) {
+
+                $dueDate = match($schedFreq) {
+                    'daily'     => $schedStart->copy()->addDays($si - 1),
+                    'weekly'    => $schedStart->copy()->addWeeks($si - 1),
+                    'bi_weekly' => $schedStart->copy()->addWeeks(($si - 1) * 2),
+                    'quarterly' => $schedStart->copy()->addMonths(($si - 1) * 3),
+                    default     => $schedStart->copy()->addMonths($si - 1),
+                };
+
+                if ($schedType === 'flat') {
+                    $schedInterest  = $schedPrincipal * $schedRate;
+                    $schedPrincipalPmt = $schedPrincipal / $schedN;
+                    $rowEmi         = $schedInterest + $schedPrincipalPmt;
+                } else {
+                    // Declining balance
+                    $schedInterest     = $schedBalance * $schedRate;
+                    $schedPrincipalPmt = $schedEmi - $schedInterest;
+                    $rowEmi            = $schedEmi;
+                }
+
+                $openingBal  = $schedBalance;
+                $schedBalance = max(0, $schedBalance - $schedPrincipalPmt);
+
+                $schedTotalEmi       += $rowEmi;
+                $schedTotalPrincipal += $schedPrincipalPmt;
+                $schedTotalInterest  += $schedInterest;
+
+                // Match actual payment for this installment slot
+                $matchedPayment = $sortedPayments->get($si - 1);
+                $isPaid    = $matchedPayment !== null;
+                $isOverdue = !$isPaid && $dueDate->isPast() && !in_array($loan->loan_status, ['completed', 'written_off']);
+                $isDue     = !$isPaid && !$isOverdue && $dueDate->isCurrentMonth();
+
+                $schedStatus = match(true) {
+                    $loan->loan_status === 'completed' => 'paid',
+                    $isPaid    => 'paid',
+                    $isOverdue => 'overdue',
+                    $isDue     => 'due',
+                    default    => 'upcoming',
+                };
+
+                $schedRows[] = [
+                    'index'          => $si,
+                    'due_date'       => $dueDate,
+                    'emi'            => $rowEmi,
+                    'principal'      => $schedPrincipalPmt,
+                    'interest'       => $schedInterest,
+                    'opening_bal'    => $openingBal,
+                    'closing_bal'    => $schedBalance,
+                    'status'         => $schedStatus,
+                    'paid_amount'    => $matchedPayment?->amount,
+                    'paid_date'      => $matchedPayment?->payment_date
+                                        ? \Carbon\Carbon::parse($matchedPayment->payment_date)->format('d M Y')
+                                        : null,
+                ];
+            }
+        @endphp
+
+        <div class="section">
+            <div class="section-title">
+                Payment Plan / Installment Schedule
+                &nbsp;·&nbsp;
+                {{ $schedN }} {{ ucwords(str_replace('_', ' ', $schedFreq)) }} installments
+                &nbsp;·&nbsp;
+                EMI: RWF {{ number_format($schedEmi, 0) }}
+            </div>
+
+            <table class="ptable">
+                <thead>
+                    <tr>
+                        <th style="text-align:center">#</th>
+                        <th>Due Date</th>
+                        <th>EMI (RWF)</th>
+                        <th>Principal (RWF)</th>
+                        <th>Interest (RWF)</th>
+                        <th>Opening Bal (RWF)</th>
+                        <th>Closing Bal (RWF)</th>
+                        <th class="td-status" style="text-align:left">Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach($schedRows as $row)
+                    @php
+                        $rowClass = match($row['status']) {
+                            'paid'    => 'row-paid',
+                            'overdue' => 'row-overdue',
+                            default   => '',
+                        };
+                        $pillClass = match($row['status']) {
+                            'paid'     => 'sched-paid',
+                            'overdue'  => 'sched-overdue',
+                            'due'      => 'sched-due',
+                            default    => 'sched-upcoming',
+                        };
+                        $pillLabel = match($row['status']) {
+                            'paid'     => '✓ Paid',
+                            'overdue'  => '⚠ Overdue',
+                            'due'      => '● Due Now',
+                            default    => 'Upcoming',
+                        };
+                    @endphp
+                    <tr class="{{ $rowClass }}">
+                        <td style="text-align:center; color:#94a3b8; font-size:11px">{{ $row['index'] }}</td>
+                        <td>
+                            {{ $row['due_date']->format('d M Y') }}
+                            @if($row['paid_date'] && $row['status'] === 'paid')
+                                <br><span style="font-size:10px; color:#16a34a">Paid {{ $row['paid_date'] }}</span>
+                            @endif
+                        </td>
+                        <td style="font-weight:700; color:#2563eb">{{ number_format($row['emi'], 0) }}</td>
+                        <td>{{ number_format($row['principal'], 0) }}</td>
+                        <td style="color:#64748b">{{ number_format($row['interest'], 0) }}</td>
+                        <td style="color:#64748b">{{ number_format($row['opening_bal'], 0) }}</td>
+                        <td style="font-weight:600; color:{{ $row['closing_bal'] > 0 ? '#dc2626' : '#16a34a' }}">
+                            {{ number_format($row['closing_bal'], 0) }}
+                        </td>
+                        <td class="td-status" style="text-align:left">
+                            <span class="sched-pill {{ $pillClass }}">{{ $pillLabel }}</span>
+                            @if($row['status'] === 'paid' && $row['paid_amount'])
+                                <br><span style="font-size:10px; color:#94a3b8">RWF {{ number_format($row['paid_amount'], 0) }}</span>
+                            @endif
+                        </td>
+                    </tr>
+                    @endforeach
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td colspan="2" style="text-align:left">TOTALS</td>
+                        <td>{{ number_format($schedTotalEmi, 0) }}</td>
+                        <td>{{ number_format($schedTotalPrincipal, 0) }}</td>
+                        <td>{{ number_format($schedTotalInterest, 0) }}</td>
+                        <td colspan="3"></td>
+                    </tr>
+                </tfoot>
+            </table>
+
+            {{-- Legend --}}
+            <div style="display:flex; gap:16px; margin-top:10px; flex-wrap:wrap;">
+                <span class="sched-pill sched-paid">✓ Paid</span>
+                <span class="sched-pill sched-due">● Due Now</span>
+                <span class="sched-pill sched-overdue">⚠ Overdue</span>
+                <span class="sched-pill sched-upcoming">Upcoming</span>
+                <span style="font-size:10px; color:#94a3b8; margin-left:4px; align-self:center;">
+                    * Declining balance: interest recalculates on reducing principal each period.
+                </span>
+            </div>
+        </div>
+        {{-- ═══════════════════════════════════════════════════════════ --}}
 
         {{-- Borrower --}}
         @if($loan->customer)
