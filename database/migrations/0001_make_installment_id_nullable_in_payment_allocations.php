@@ -11,8 +11,8 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('users', function (Blueprint $table) {
-            $table->boolean('has_email_authentication')->default(false);
+        Schema::table('payment_allocations', function (Blueprint $table) {
+            //
         });
     }
 
@@ -21,7 +21,7 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::table('users', function (Blueprint $table) {
+        Schema::table('payment_allocations', function (Blueprint $table) {
             //
         });
     }

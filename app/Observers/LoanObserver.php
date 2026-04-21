@@ -61,7 +61,7 @@ class LoanObserver
     {
         try {
             $data = [
-                'sender'     => 'FASITA',
+                'sender'     => 'FASITAAA',
                 'recipients' => $recipient,
                 'message'    => $message,
                 'dlrurl'     => 'http://www.dlrurl.rw/deliversms/',

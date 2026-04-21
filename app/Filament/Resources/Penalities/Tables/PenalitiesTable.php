@@ -47,9 +47,10 @@ class PenalitiesTable
                     ->sortable()
                     ->icon('heroicon-o-calendar')
                     ->iconColor('gray'),
+                    TextColumn::make('status'),
 
                 TextColumn::make('is_waived')
-                    ->label('Status')
+
                     ->badge()
                     ->formatStateUsing(fn ($state) => $state ? 'Waived' : 'Active')
                     ->color(fn ($state) => $state ? 'success' : 'danger')

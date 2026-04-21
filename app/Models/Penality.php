@@ -27,7 +27,9 @@ class Penality extends Model
         'is_waived',
         'waived_date',
         'waived_by',
-        
+            'status',   // ← add this
+
+
     ];
 
     /**

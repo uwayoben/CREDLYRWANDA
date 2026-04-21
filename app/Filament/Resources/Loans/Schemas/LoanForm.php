@@ -359,9 +359,15 @@ class LoanForm
                                     ->dehydrated(true)
                                     ->default(0),
 
-                                TextInput::make('application_fee'),
-                                TextInput::make('processing_fee'),
-                                TextInput::make('managment_fee'),
+                                TextInput::make('application_fee')
+                                ->prefixIcon('heroicon-o-banknotes')
+                                ->numeric(),
+                                TextInput::make('processing_fee')
+                                ->prefixIcon('heroicon-o-banknotes')
+                                ->numeric(),
+                                TextInput::make('managment_fee')
+                                ->prefixIcon('heroicon-o-banknotes')
+                                ->numeric(),
                             ]),
                     ]),
 

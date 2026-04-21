@@ -17,9 +17,9 @@ class Loan extends Model
         'loan_class', 'date_when_arrears_start', 'arrears_amount',
         'collateral_details', 'collateral_value', 'guarantee_collateral',
         'purpose', 'notes', 'approved_by', 'approved_at',
-        'disbursed_at', 'completed_at','managment_fee',
-        'amount_paid', 'principal_paid','interest_paid',
-        'penalty_paid', 'remaining_balance','loan_document'
+        'disbursed_at', 'completed_at', 'managment_fee',
+        'amount_paid', 'principal_paid', 'interest_paid',
+        'penalty_paid', 'remaining_balance', 'loan_document',
     ];
 
     protected $casts = [
@@ -83,7 +83,6 @@ class Loan extends Model
             ]);
         }
 
-        // ✅ FIX 1: declining tracks principal only, flat tracks total repayment
         $startingBalance = $type === 'flat'
             ? (float) $this->total_amount
             : (float) $this->principal_amount;
@@ -159,16 +158,69 @@ class Loan extends Model
         };
     }
 
+    // ── Float helper ──────────────────────────────────────────────
+    // Prevents floating-point drift (e.g. 69999.9999 instead of 70000)
+
+    private static function money(float $value): float
+    {
+        return round($value, 2);
+    }
+
     // ── Payment Processing ────────────────────────────────────────
 
     public function recordPayment(array $data): Payment
     {
-        $remaining = (float) $data['amount'];
+        // Round immediately — prevents float drift throughout
+        $remaining = self::money((float) $data['amount']);
 
-        $interestPaid  = 0;
-        $principalPaid = 0;
-        $penaltyPaid   = 0;
+        $interestPaid  = 0.0;
+        $principalPaid = 0.0;
+        $penaltyPaid   = 0.0;
         $allocations   = [];
+
+        // ── STEP 1: Pay standalone penalties FIRST ────────────────
+        // Penalties live in the penalties table and are NOT part of
+        // remaining_balance. They must never reduce remaining_balance.
+        //
+        // is_waived is NEVER touched here — only manager waive actions
+        // set that flag. Payment progress is tracked via:
+        //   - penalty.status  → 'unpaid' | 'partial' | 'paid'
+        //   - loan.penalty_paid → running total of all penalty payments
+
+        $unpaidPenalties = $this->penalties()
+            ->where('is_waived', false)
+            ->whereIn('status', ['unpaid', 'partial']) // skip already-paid penalties
+            ->get();
+
+        foreach ($unpaidPenalties as $penalty) {
+            if ($remaining <= 0) break;
+
+            $penaltyAmount      = self::money((float) $penalty->penalty_amount);
+            $paidForThisPenalty = self::money(min($remaining, $penaltyAmount));
+
+            if ($paidForThisPenalty > 0) {
+                $penaltyPaid += $paidForThisPenalty;
+                $remaining    = self::money($remaining - $paidForThisPenalty);
+
+                $allocations[] = [
+                    'penalty_id'       => $penalty->id,
+                    'installment_id'   => null,
+                    'principal_amount' => 0,
+                    'interest_amount'  => 0,
+                    'penalty_amount'   => $paidForThisPenalty,
+                ];
+
+                // Update penalty status — never touch is_waived here
+                $penalty->update([
+                    'status' => self::money($penaltyAmount - $paidForThisPenalty) <= 0
+                        ? 'paid'     // fully covered → status = paid
+                        : 'partial', // partially covered → status = partial
+                ]);
+            }
+        }
+
+        // ── STEP 2: Pay installments (penalty → interest → principal) ─
+        // Only $remaining (after penalties above) reduces the balance.
 
         $installments = $this->installments()
             ->whereIn('status', ['pending', 'partial', 'overdue'])
@@ -178,58 +230,63 @@ class Loan extends Model
         foreach ($installments as $installment) {
             if ($remaining <= 0) break;
 
-            $interestOwed  = (float) $installment->interest_due  - $this->getPaidInterestForInstallment($installment->id);
-            $principalOwed = (float) $installment->principal_due - $this->getPaidPrincipalForInstallment($installment->id);
-            $penaltyOwed   = (float) $installment->penalty_due   - $this->getPaidPenaltyForInstallment($installment->id);
+            $interestOwed  = self::money(
+                (float) $installment->interest_due  - $this->getPaidInterestForInstallment($installment->id)
+            );
+            $principalOwed = self::money(
+                (float) $installment->principal_due - $this->getPaidPrincipalForInstallment($installment->id)
+            );
+            $penaltyOwed   = self::money(
+                (float) $installment->penalty_due   - $this->getPaidPenaltyForInstallment($installment->id)
+            );
 
-            $allocInterest  = 0;
-            $allocPrincipal = 0;
-            $allocPenalty   = 0;
+            $allocPenalty   = 0.0;
+            $allocInterest  = 0.0;
+            $allocPrincipal = 0.0;
 
-            // 1. Pay penalty
+            // 1. Installment-level penalty
             if ($penaltyOwed > 0 && $remaining > 0) {
-                $allocPenalty = min($remaining, $penaltyOwed);
-                $remaining   -= $allocPenalty;
+                $allocPenalty = self::money(min($remaining, $penaltyOwed));
+                $remaining    = self::money($remaining - $allocPenalty);
                 $penaltyPaid += $allocPenalty;
             }
 
-            // 2. Pay interest
+            // 2. Interest
             if ($interestOwed > 0 && $remaining > 0) {
-                $allocInterest  = min($remaining, $interestOwed);
-                $remaining     -= $allocInterest;
+                $allocInterest  = self::money(min($remaining, $interestOwed));
+                $remaining      = self::money($remaining - $allocInterest);
                 $interestPaid  += $allocInterest;
             }
 
-            // 3. Pay principal
+            // 3. Principal
             if ($principalOwed > 0 && $remaining > 0) {
-                $allocPrincipal = min($remaining, $principalOwed);
-                $remaining     -= $allocPrincipal;
+                $allocPrincipal = self::money(min($remaining, $principalOwed));
+                $remaining      = self::money($remaining - $allocPrincipal);
                 $principalPaid += $allocPrincipal;
             }
 
             if ($allocInterest + $allocPrincipal + $allocPenalty > 0) {
                 $allocations[] = [
                     'installment_id'   => $installment->id,
+                    'penalty_id'       => null,
                     'principal_amount' => $allocPrincipal,
                     'interest_amount'  => $allocInterest,
                     'penalty_amount'   => $allocPenalty,
                 ];
 
-                $totalPaid = $allocInterest + $allocPrincipal + $allocPenalty;
-                $totalDue  = $interestOwed  + $principalOwed  + $penaltyOwed;
+                $totalAllocated = self::money($allocInterest + $allocPrincipal + $allocPenalty);
+                $totalDue       = self::money($interestOwed  + $principalOwed  + $penaltyOwed);
 
-                if (round($totalPaid, 2) >= round($totalDue, 2)) {
-                    $installment->update([
-                        'status'    => 'paid',
-                        'paid_date' => $data['payment_date'],
-                    ]);
-                } else {
-                    $installment->update(['status' => 'partial']);
-                }
+                $installment->update(
+                    $totalAllocated >= $totalDue
+                        ? ['status' => 'paid',    'paid_date' => $data['payment_date']]
+                        : ['status' => 'partial']
+                );
             }
         }
 
-        // Create Payment record
+        // ── STEP 3: Create Payment record ─────────────────────────
+
         $payment = Payment::create([
             'company_id'            => $this->company_id,
             'loan_id'               => $this->id,
@@ -242,35 +299,57 @@ class Loan extends Model
             'principal_paid'        => $principalPaid,
             'interest_paid'         => $interestPaid,
             'penalty_paid'          => $penaltyPaid,
-            'advance_paid'          => max(0, $remaining),
-            'notes'                 => $data['notes'] ?? null,
+            'advance_paid'          => self::money(max(0, $remaining)),
+            'notes'                 => $data['notes']                 ?? null,
             'transaction_reference' => $data['transaction_reference'] ?? null,
         ]);
 
-        // Create payment allocations
+        // ── STEP 4: Create payment allocations ────────────────────
+
         foreach ($allocations as $alloc) {
-            PaymentAllocation::create(array_merge(
-                $alloc,
-                ['payment_id' => $payment->id]
-            ));
+            PaymentAllocation::create(array_merge($alloc, ['payment_id' => $payment->id]));
         }
 
-        // ── Update loan totals ────────────────────────────────────
-        $this->increment('amount_paid', $data['amount']);
+        // ── STEP 5: Update loan totals ────────────────────────────
+
+        $this->increment('amount_paid',    $data['amount']);
         $this->increment('principal_paid', $principalPaid);
-        $this->increment('interest_paid', $interestPaid);
-        $this->increment('penalty_paid', $penaltyPaid);
+        $this->increment('interest_paid',  $interestPaid);
+        $this->increment('penalty_paid',   $penaltyPaid);
 
-        // ✅ FIX 2: declining reduces by principal only (interest is a period cost)
-        //           flat reduces by full allocated amount
+        // remaining_balance tracks principal (+ interest for flat loans).
+        // Penalties are a SEPARATE obligation and must NEVER reduce it.
+
         if ($this->interest_type === 'flat') {
-            $this->decrement('remaining_balance', $principalPaid + $interestPaid + $penaltyPaid);
+            $this->decrement('remaining_balance', self::money($principalPaid + $interestPaid));
         } else {
-            $this->decrement('remaining_balance', $principalPaid + $penaltyPaid);
+            $this->decrement('remaining_balance', $principalPaid);
         }
 
-        // Check if fully paid
-        if (round((float) $this->fresh()->remaining_balance, 2) <= 0) {
+        // ── STEP 6: Check if loan is fully paid ───────────────────
+        // remainingPenalty uses sum(penalty_amount) minus penalty_paid
+        // across non-waived penalties only. is_waived is never set by
+        // payments so this correctly reflects genuinely unpaid amounts.
+
+        $fresh = $this->fresh();
+
+        $remainingPenalty = self::money(
+            (float) $fresh->penalties()->where('is_waived', false)->sum('penalty_amount') -
+            (float) $fresh->penalty_paid
+        );
+
+        $totalOutstanding = $fresh->interest_type === 'declining'
+            ? self::money(
+                self::money(max(0, (float) $fresh->remaining_balance)) +
+                self::money(max(0, (float) $fresh->total_interest - (float) $fresh->interest_paid)) +
+                max(0, $remainingPenalty)
+              )
+            : self::money(
+                self::money(max(0, (float) $fresh->remaining_balance)) +
+                max(0, $remainingPenalty)
+              );
+
+        if ($totalOutstanding <= 0) {
             $this->update([
                 'loan_status'  => 'completed',
                 'completed_at' => $data['payment_date'],

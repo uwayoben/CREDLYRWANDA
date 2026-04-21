@@ -94,4 +94,10 @@ class LoanResource extends Resource
             'edit'   => EditLoan::route('/{record}/edit'),
         ];
     }
+    public static function canAccess(): bool
+{
+    $user = Auth::user();
+
+    return $user?->isManagingDirector() || $user?->isLoanOfficer() || $user?->isSuperAdmin();
+}
 }
