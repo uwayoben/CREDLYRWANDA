@@ -217,16 +217,28 @@ class BnrClassSheet implements FromArray, WithTitle, ShouldAutoSize, WithEvents
         // Annual interest rate = monthly rate × 12
         $annualRate = round((float) $loan->interest_rate / 100 * 12, 4);
 
+       $age = '';
+
+if (!empty($customer?->date_of_birth)) {
+    try {
+        $dob = Carbon::parse($customer->date_of_birth);
+
+        if ($dob->isPast()) {
+            $age = $dob->age; // ✅ best way (always integer)
+        }
+    } catch (\Exception $e) {
+        $age = '';
+    }
+}
+
         return [
             $no,                                                                            // A  No
             $customer?->names ?? '',                                                        // B  Names of Borrowers
             $customer?->national_id ?? '',                                                  // C  ID of the Borrower
             $customer?->phone ?? '',                                                        // D  Telephone number
             ucfirst($customer?->gender ?? ''),                                              // E  Gender
-            $customer?->date_of_birth                                                       // F  Age
-                ? (int) now()->diffInYears($customer->date_of_birth)
-                : '',
-            'Client',                                                                       // G  Relationship with NDFSP
+            $age,                                                      // F  Age,
+            'No',                                                                       // G  Relationship with NDFSP
             ucfirst($customer?->marital_status ?? ''),                                      // H  Marital Status
             '',                                                                             // I  Previous loans paid on time
             $loan->purpose ?? '',                                                           // J  Purpose of the loan
