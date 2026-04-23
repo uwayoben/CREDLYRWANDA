@@ -48,7 +48,7 @@ class AdminPanelProvider extends PanelProvider
     // \App\Filament\Widgets\LoanChartWidget::class,
     \App\Filament\Widgets\UserOverview::class,
      \App\Filament\Widgets\LoanStatus::class,
-         \App\Filament\Widgets\CustomerStatsWidget::class,
+         
 
 
 
